@@ -213,6 +213,14 @@
   pointer-events: none;
 }
 
+.fm-comment {
+  font-size: 10px;
+  font-style: italic;
+  fill: var(--text-faint);
+  dominant-baseline: middle;
+  pointer-events: none;
+}
+
 .fm-result.fm-result-file .fm-result-name {
   color: var(--text-muted);
 }

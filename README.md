@@ -16,6 +16,7 @@ I love Obsidian. So I see no reason why it can't also help me keep the folder st
 - Reads the structure only: names, sizes, file counts. Nothing is changed without an explicit command.
 - Folder index: on the next open only changed directories are re-read, the rest come from the index — opening takes a fraction of a second.
 - Search by file names: the search box finds both folders and files across the indexed tree.
+- Comments from properties: a file with frontmatter shows the value of its comment property (defaults: `comment`, `комментарий`, `description`, `описание`, `note`). The mode is toggled by the "комменты" button in the toolbar or by the checkbox in the settings.
 - Restores the map view after a restart: expanded nodes, pan and zoom.
 - Reads the disk in parallel (8 workers) without blocking the UI: a folder with 5,200 directories and 68,500 files on C: is read in ~1.8 s versus ~26 s with a sequential walk.
 - Service folders (`node_modules`, `.git`, `__pycache__` and similar) are hidden with one toggle.
@@ -58,6 +59,7 @@ Requirements: Obsidian 1.4.0+ on desktop. The plugin does not work on mobile: it
 | "свернуть" | collapse everything down to the root |
 | "служебные" | show / hide `node_modules`, `.git`, `__pycache__` and similar |
 | "файлы" | show / hide files (on by default) |
+| "комменты" | show / hide comment properties of files |
 | "обновить" | re-read the folder (unchanged directories still come from the index) |
 | ⛶ | fit the map to the window |
 
@@ -70,6 +72,8 @@ The interface is currently in Russian; the labels above are the literal button c
 - **Folders per node** — how many child folders to show at once (the rest go under "ещё N"), 45 by default.
 - **Show files** — render files next to folders.
 - **Files per node** — how many files to show inside one folder, 10 by default.
+- **Show comments** — same as the "комменты" button: render the comment property under the file name.
+- **Comment properties** — comma-separated property names; the first one found wins. Changing the list rebuilds the index.
 - **Read depth** — nesting limit while scanning, 14 by default.
 - **Index** — stored in the plugin folder and updated by directory modification time; the timer-based cache is no longer used.
 - **Clear cache** — delete the index and saved scans.
@@ -104,6 +108,23 @@ The folder index lives in `<plugin>/cache/idx-<hash>.json` and stores, per direc
 - A directory that changed (something added, removed or renamed inside) is re-read on its own.
 - Hidden names and depth are applied while building the tree, so toggling "служебные" does not invalidate the index.
 - Search covers the folders on the map and every file in the index: a result shows the name, size and folder; clicking reveals that folder on the map.
+
+## Comments from properties
+
+Notes can carry a short description in their frontmatter:
+
+```yaml
+---
+comment: Anything that explains what this file is
+---
+```
+
+With the "комменты" toggle on, the map draws that value under the file name as a dim italic line, and the node becomes two lines tall. Hovering shows the full text, clicking puts the path, size and comment into the status bar.
+
+- Properties are matched by name, case-insensitive: `comment`, `комментарий`, `description`, `описание`, `note` by default, configurable in the settings. The first match wins.
+- For notes inside the vault the value comes from the Obsidian metadata cache, so scanning stays fast and nothing extra is read from disk.
+- For files outside the vault (and for dot-folders Obsidian does not index) the first 4 KB of the file is read and its frontmatter parsed.
+- Multi-line values (`|`, `>`) are skipped — the map shows single-line properties only.
 
 ## File names
 

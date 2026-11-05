@@ -21,10 +21,59 @@ const DEFAULT_SETTINGS = {
   maxDepth: 14,
   cacheMinutes: 30,
   showFiles: true,
+  showComments: false,
+  commentProps: 'comment, комментарий, description, описание, note',
 };
 
 const CACHE_VERSION = 2;
 const MAX_FILE_LIST = 120;
+const COMMENT_LIMIT = 4096;
+
+function commentKeys(raw) {
+  return String(raw || '')
+    .split(/[,\n;]/)
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function parseComment(text, keys) {
+  const head = String(text || '');
+  if (!keys || !keys.length) return null;
+  if (head.indexOf('---') !== 0) return null;
+  const end = head.indexOf('\n---', 3);
+  const block = end > 0 ? head.slice(3, end) : head.slice(3);
+  for (const line of block.split(/\r?\n/)) {
+    const m = line.match(/^([^:#][^:]*):\s*(.*)$/);
+    if (!m) continue;
+    const key = m[1].trim().toLowerCase();
+    if (keys.indexOf(key) < 0) continue;
+    let val = m[2].trim();
+    if (!val || /^[|>]/.test(val)) continue;
+    val = val.replace(/^['"]|['"]$/g, '').trim();
+    if (val) return val;
+  }
+  return null;
+}
+
+async function readComment(fsp, filePath, keys) {
+  let fh = null;
+  try {
+    fh = await fsp.open(filePath, 'r');
+    const buf = Buffer.alloc(COMMENT_LIMIT);
+    const res = await fh.read(buf, 0, COMMENT_LIMIT, 0);
+    return parseComment(buf.slice(0, res.bytesRead).toString('utf8'), keys);
+  } catch (e) {
+    return null;
+  } finally {
+    if (fh) {
+      try {
+        await fh.close();
+      } catch (e) {
+        /* уже закрыт */
+      }
+    }
+  }
+}
 
 function fmt(bytes) {
   let v = Number(bytes) || 0;
@@ -62,7 +111,7 @@ function aggregate(node) {
   return node.total;
 }
 
-const INDEX_VERSION = 1;
+const INDEX_VERSION = 2;
 const SCAN_CONCURRENCY = 8;
 
 async function scanFolder(rootPath, options, hooks) {
@@ -111,11 +160,20 @@ async function scanFolder(rootPath, options, hooks) {
     }
     const files = [];
     const CHUNK = 32;
+    const keys = options.commentProps || [];
     for (let i = 0; i < fileNames.length; i += CHUNK) {
       const slice = fileNames.slice(i, i + CHUNK);
-      const sizes = await Promise.all(slice.map((n) => fsp.stat(nodePath.join(dir, n)).then((s) => s.size).catch(() => null)));
+      const meta = await Promise.all(slice.map((n) => {
+        const full = nodePath.join(dir, n);
+        return fsp.stat(full).then((s) => ({ size: s.size, full: full })).catch(() => null);
+      }));
+      const notes = await Promise.all(meta.map((m, j) => {
+        if (!m || !keys.length || !/\.md$/i.test(slice[j])) return Promise.resolve(null);
+        return options.commentResolver ? options.commentResolver(m.full) : readComment(fsp, m.full, keys);
+      }));
       for (let j = 0; j < slice.length; j++) {
-        if (sizes[j] !== null) files.push([slice[j], sizes[j]]);
+        if (!meta[j]) continue;
+        files.push(notes[j] ? [slice[j], meta[j].size, notes[j]] : [slice[j], meta[j].size]);
       }
     }
     refreshed += 1;
@@ -140,7 +198,7 @@ async function scanFolder(rootPath, options, hooks) {
     for (const pair of rec.files) {
       node.size += pair[1];
       node.files += 1;
-      node.fileList.push({ n: pair[0], s: pair[1] });
+      node.fileList.push({ n: pair[0], s: pair[1], c: pair[2] || null });
     }
     if (node.fileList.length > MAX_FILE_LIST) {
       node.fileList.sort((a, b) => b.s - a.s);
@@ -174,7 +232,7 @@ async function scanFolder(rootPath, options, hooks) {
     refreshed: refreshed,
   };
   if (onProgress) onProgress(seen, rootPath);
-  return { root: root, stats: stats, index: { v: INDEX_VERSION, path: rootPath, dirs: cache } };
+  return { root: root, stats: stats, index: { v: INDEX_VERSION, path: rootPath, keys: (options.commentProps || []).join('|'), dirs: cache } };
 }
 
 function countFiles(node) {
@@ -194,6 +252,7 @@ function fileNode(parent, file) {
     dirs: 0,
     kids: [],
     file: true,
+    comment: file.c || null,
   };
 }
 
@@ -257,23 +316,24 @@ function emptyNode(parent) {
 
 function computeLayout(root, st) {
   const nodes = [];
+  const rowH = st.rowH || ROW_H;
   let cursor = 0;
   const walk = (node, depth, parent) => {
     node._x = 16 + depth * COL_W;
     node._p = parent;
     const kids = st.expanded.has(node.path) ? visibleChildren(node, st) : [];
     if (!kids.length) {
-      node._y = cursor * ROW_H;
+      node._y = cursor * rowH;
       cursor += 1;
     } else {
       const start = cursor;
       for (const k of kids) walk(k, depth + 1, node);
-      node._y = Math.round(((start + cursor - 1) / 2) * ROW_H);
+      node._y = Math.round(((start + cursor - 1) / 2) * rowH);
     }
     nodes.push(node);
   };
   walk(root, 0, null);
-  return { nodes: nodes, height: Math.max(cursor, 1) * ROW_H };
+  return { nodes: nodes, height: Math.max(cursor, 1) * rowH };
 }
 
 function branchColor(root, node) {
@@ -544,6 +604,7 @@ class FolderMindmapView extends ItemView {
     this.settingsSnapshot = { maxChildren: 45, maxFiles: 10 };
     this.hiddenSet = new Set();
     this.showFiles = true;
+    this.showComments = false;
     this.lastLayout = [];
     this.pendingDrag = null;
     this.dragging = false;
@@ -619,6 +680,7 @@ class FolderMindmapView extends ItemView {
     mk('свернуть', 'Свернуть всё', () => this.collapseAll());
     this.svcBtn = mk('служебные', 'Показывать node_modules, .git и подобные', () => this.toggleService(), 'fm-toggle on');
     this.filesBtn = mk('файлы', 'Показывать файлы, а не только папки', () => this.toggleFiles(), 'fm-toggle on');
+    this.commentsBtn = mk('комменты', 'Показывать свойства-комментарии у файлов', () => this.toggleComments(), 'fm-toggle');
     mk('обновить', 'Перечитать папку', () => this.load(true));
     this.undoBtn = mk('отменить', 'Отменить последнее перемещение или переименование', () => this.undoLast(), 'fm-disabled');
     mk('+', 'Приблизить', () => this.zoom(1.2));
@@ -670,6 +732,8 @@ class FolderMindmapView extends ItemView {
     this.hiddenSet = this.hiddenNames();
     this.showFiles = this.plugin.settings.showFiles !== false;
     if (this.filesBtn) this.filesBtn.toggleClass('on', this.showFiles);
+    this.showComments = this.plugin.settings.showComments === true;
+    if (this.commentsBtn) this.commentsBtn.toggleClass('on', this.showComments);
 
     const index = await this.plugin.readIndex(this.rootPath);
     this.indexDirs = index ? index.dirs : {};
@@ -719,12 +783,16 @@ class FolderMindmapView extends ItemView {
 
 
   st() {
+    const cm = !!this.showComments;
     return {
       expanded: this.expanded,
       hidden: this.hideService ? this.hiddenSet : new Set(),
       maxChildren: this.settingsSnapshot.maxChildren,
       maxFiles: this.settingsSnapshot.maxFiles,
       showFiles: this.showFiles,
+      comments: cm,
+      nodeH: cm ? 34 : NODE_H,
+      rowH: cm ? 40 : ROW_H,
     };
   }
 
@@ -1054,7 +1122,10 @@ class FolderMindmapView extends ItemView {
 
   render() {
     if (!this.tree) return;
-    const layout = computeLayout(this.tree, this.st());
+    const st = this.st();
+    const layout = computeLayout(this.tree, st);
+    const nh = st.nodeH || NODE_H;
+    const comments = !!st.comments;
     const NS = 'http://www.w3.org/2000/svg';
     while (this.scene.firstChild) this.scene.removeChild(this.scene.firstChild);
     const links = document.createDocumentFragment();
@@ -1065,9 +1136,9 @@ class FolderMindmapView extends ItemView {
     for (const n of layout.nodes) {
       if (n._p) {
         const px = n._p._x + NODE_W;
-        const py = n._p._y + NODE_H / 2;
+        const py = n._p._y + nh / 2;
         const cx = n._x;
-        const cy = n._y + NODE_H / 2;
+        const cy = n._y + nh / 2;
         const mx = (px + cx) / 2;
         const p = document.createElementNS(NS, 'path');
         p.setAttribute('d', 'M' + px + ',' + py + ' C' + mx + ',' + py + ' ' + mx + ',' + cy + ' ' + cx + ',' + cy);
@@ -1089,14 +1160,14 @@ class FolderMindmapView extends ItemView {
       const rect = document.createElementNS(NS, 'rect');
       rect.setAttribute('class', 'fm-box');
       rect.setAttribute('width', String(NODE_W));
-      rect.setAttribute('height', String(NODE_H));
+      rect.setAttribute('height', String(nh));
       rect.setAttribute('rx', '6');
       rect.setAttribute('stroke', color);
       grp.appendChild(rect);
 
       const stripe = document.createElementNS(NS, 'rect');
       stripe.setAttribute('width', '3');
-      stripe.setAttribute('height', String(NODE_H));
+      stripe.setAttribute('height', String(nh));
       stripe.setAttribute('rx', '1.5');
       stripe.setAttribute('fill', color);
       grp.appendChild(stripe);
@@ -1108,21 +1179,36 @@ class FolderMindmapView extends ItemView {
           : n.files + ' ' + plural(n.files, 'файл', 'файла', 'файлов') + ' · ' + fmt(n.total);
       const rightW = Math.ceil(right.length * 6.1);
       const nameMax = Math.max(6, Math.floor((NODE_W - 18 - rightW) / 6.6));
+      const showComment = comments && n.file && !!n.comment;
+      const nameY = showComment ? 12 : nh / 2 + 0.5;
 
       const label = document.createElementNS(NS, 'text');
       label.setAttribute('class', 'fm-name');
       label.setAttribute('x', '10');
-      label.setAttribute('y', String(NODE_H / 2 + 0.5));
+      label.setAttribute('y', String(nameY));
       label.textContent = n.file ? clipFile(n.name, nameMax) : clip(n.name, nameMax);
       grp.appendChild(label);
 
       const size = document.createElementNS(NS, 'text');
       size.setAttribute('class', 'fm-size');
       size.setAttribute('x', String(NODE_W - 8));
-      size.setAttribute('y', String(NODE_H / 2 + 0.5));
+      size.setAttribute('y', String(nameY));
       size.setAttribute('text-anchor', 'end');
       size.textContent = right;
       grp.appendChild(size);
+
+      if (showComment) {
+        const cm = document.createElementNS(NS, 'text');
+        cm.setAttribute('class', 'fm-comment');
+        cm.setAttribute('x', '10');
+        cm.setAttribute('y', String(nh - 6));
+        cm.textContent = clip(String(n.comment), Math.max(8, Math.floor((NODE_W - 24) / 5.6)));
+        grp.appendChild(cm);
+      }
+
+      const tip = document.createElementNS(NS, 'title');
+      tip.textContent = n.comment ? n.name + ' — ' + n.comment : (n.file ? this.humanPath(n.path) : n.path);
+      grp.appendChild(tip);
 
       grp.addEventListener('click', () => this.onNodeClick(n));
       grp.addEventListener('contextmenu', (e) => {
@@ -1134,7 +1220,7 @@ class FolderMindmapView extends ItemView {
       boxes.appendChild(grp);
 
       maxX = Math.max(maxX, n._x + NODE_W);
-      maxY = Math.max(maxY, n._y + NODE_H);
+      maxY = Math.max(maxY, n._y + nh);
     }
 
     this.scene.appendChild(links);
@@ -1336,7 +1422,7 @@ class FolderMindmapView extends ItemView {
       return;
     }
     if (node.file) {
-      this.setStatus(this.humanPath(node.path) + ' · ' + fmt(node.total));
+      this.setStatus(this.humanPath(node.path) + ' · ' + fmt(node.total) + (node.comment ? ' · ' + node.comment : ''));
       return;
     }
     if (this.expanded.has(node.path)) this.expanded.delete(node.path);
@@ -1366,6 +1452,15 @@ class FolderMindmapView extends ItemView {
   toggleFiles() {
     this.showFiles = !this.showFiles;
     if (this.filesBtn) this.filesBtn.toggleClass('on', this.showFiles);
+    this.render();
+    this.fit();
+  }
+
+  toggleComments() {
+    this.showComments = !this.showComments;
+    if (this.commentsBtn) this.commentsBtn.toggleClass('on', this.showComments);
+    this.plugin.settings.showComments = this.showComments;
+    void this.plugin.saveSettings();
     this.render();
     this.fit();
   }
@@ -1528,6 +1623,37 @@ class FolderMindmapSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName('Показывать комментарии')
+      .setDesc('У файлов с фронтматтером показывается значение свойства-комментария. Кнопка «комменты» в карте переключает это же.')
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.showComments === true).onChange(async (v) => {
+          this.plugin.settings.showComments = v;
+          await this.plugin.saveSettings();
+          for (const leaf of this.app.workspace.getLeavesOfType('folder-mindmap-view')) {
+            const view = leaf.view;
+            if (!view) continue;
+            view.showComments = v;
+            if (view.commentsBtn) view.commentsBtn.toggleClass('on', v);
+            view.render();
+            view.fit();
+          }
+        })
+      );
+
+    new Setting(containerEl)
+      .setName('Свойства-комментарии')
+      .setDesc('Имена свойств через запятую (например, comment, комментарий). Берётся первое найденное значение; после изменения индекс пересобирается.')
+      .addText((t) =>
+        t
+          .setPlaceholder('comment, комментарий')
+          .setValue(this.plugin.settings.commentProps || '')
+          .onChange(async (v) => {
+            this.plugin.settings.commentProps = v;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
       .setName('Файлов на узел')
       .setDesc('Сколько файлов показывать в одной папке; остальные — под «ещё N файлов».')
       .addSlider((s) =>
@@ -1635,10 +1761,46 @@ class FolderMindmapPlugin extends Plugin {
     );
   }
 
+  commentResolver(keys) {
+    if (!keys.length) return null;
+    const base = (this.app.vault.adapter && this.app.vault.adapter.basePath) || '';
+    const norm = (p) => String(p).replace(/\//g, '\\').toLowerCase();
+    const baseN = base ? norm(base) + '\\' : '';
+    return async (full) => {
+      try {
+        if (base && norm(full).indexOf(baseN) === 0) {
+          const rel = String(full).slice(base.length + 1).replace(/\\/g, '/');
+          const file = this.app.vault.getAbstractFileByPath(rel);
+          if (file) {
+            const fm = (this.app.metadataCache.getFileCache(file) || {}).frontmatter;
+            if (fm) {
+              for (const key of keys) {
+                for (const name of Object.keys(fm)) {
+                  if (name.toLowerCase() !== key) continue;
+                  const val = fm[name];
+                  if (typeof val === 'string' && val.trim()) return val.trim();
+                  if (typeof val === 'number' || typeof val === 'boolean') return String(val);
+                }
+              }
+            }
+            return null;
+          }
+          /* файл не в индексе Obsidian (скрытая папка) — дочитываем с диска */
+        }
+        return await readComment(fs.promises, full, keys);
+      } catch (e) {
+        return null;
+      }
+    };
+  }
+
   async scan(path, onProgress, isCancelled, index) {
+    const keys = commentKeys(this.settings.commentProps);
     return scanFolder(path, {
       hiddenNames: String(this.settings.hiddenNames || '').split(/[,\n;]/).map((s) => s.trim()).filter(Boolean),
       maxDepth: this.settings.maxDepth,
+      commentProps: keys,
+      commentResolver: this.commentResolver(keys),
       index: index,
     }, { onProgress: onProgress, isCancelled: isCancelled });
   }
@@ -1652,6 +1814,7 @@ class FolderMindmapPlugin extends Plugin {
       const raw = await fs.promises.readFile(this.indexFile(path), 'utf8');
       const data = JSON.parse(raw);
       if (!data || data.v !== INDEX_VERSION || !data.dirs) return null;
+      if ((data.keys || '') !== commentKeys(this.settings.commentProps).join('|')) return null;
       return data;
     } catch (e) {
       return null;
@@ -1730,4 +1893,4 @@ class FolderMindmapPlugin extends Plugin {
 }
 
 module.exports = FolderMindmapPlugin;
-module.exports.__lib = { scanFolder: scanFolder, computeLayout: computeLayout, visibleChildren: visibleChildren, fmt: fmt, aggregate: aggregate, clipFile: clipFile };
+module.exports.__lib = { scanFolder: scanFolder, computeLayout: computeLayout, visibleChildren: visibleChildren, fmt: fmt, aggregate: aggregate, clipFile: clipFile, parseComment: parseComment, commentKeys: commentKeys };

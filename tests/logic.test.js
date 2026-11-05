@@ -106,6 +106,16 @@ w(path.join('node_modules', 'pkg', 'index.js'), 4096);
   const json = JSON.stringify(root, (k, v) => (k.charAt(0) === '_' ? undefined : v));
   assert(json.length > 50 && json.indexOf('"_p"') < 0, 'сериализация без служебных ссылок');
 
+  // комментарии из фронтматтера
+  const keys = lib.commentKeys('comment, комментарий');
+  const p1 = lib.parseComment('---\ncomment: Привет\n---\nтело', keys);
+  assert(p1 === 'Привет', 'комментарий из comment (' + p1 + ')');
+  const p2 = lib.parseComment('---\nкомментарий: "В кавычках"\n---', keys);
+  assert(p2 === 'В кавычках', 'комментарий по русскому имени и в кавычках (' + p2 + ')');
+  assert(lib.parseComment('без фронтматтера', keys) === null, 'без фронтматтера — null');
+  assert(lib.parseComment('---\ncomment: |\n  строка1\n---', keys) === null, 'многострочный комментарий пропускается');
+  assert(lib.parseComment('---\ntags: x\n---', keys) === null, 'чужое свойство не берётся');
+
   // индекс: повторный проход по неизменённой папке берёт записи из индекса
   assert(res.index && res.index.dirs && Object.keys(res.index.dirs).length >= 3, 'индекс содержит записи каталогов');
   const second = await lib.scanFolder(tmp, { hiddenNames: ['node_modules'], maxDepth: 10, index: res.index });

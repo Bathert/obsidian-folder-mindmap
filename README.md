@@ -148,6 +148,17 @@ A file is shown with its extension. If the name does not fit the node, only the 
 
 The plugin requires raw file system access on purpose: the whole point is showing folders that live outside the vault.
 
+## Security
+
+The community directory scan flags two things. Both are intentional and bounded:
+
+| Scan finding | What the code actually does |
+|---|---|
+| Direct file system access (`fs` outside the vault API) | `readdir`/`stat` only inside the folder you open — showing folders outside the vault is the whole point. Directory symlinks are shown with a `→` marker and are **not** traversed, so a scan cannot wander outside the opened tree. Writes go to `<plugin>/cache/` plus the objects you explicitly rename or move; a move whose destination is outside the opened folder asks for confirmation first. |
+| Clipboard access | One call to `navigator.clipboard.writeText` behind the "Copy path" item. The clipboard is never read. |
+
+No network requests, no telemetry, no third-party code.
+
 ## Project layout
 
 ```

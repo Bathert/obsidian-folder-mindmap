@@ -111,7 +111,7 @@ function aggregate(node) {
   return node.total;
 }
 
-const INDEX_VERSION = 2;
+const INDEX_VERSION = 3;
 const SCAN_CONCURRENCY = 8;
 
 async function scanFolder(rootPath, options, hooks) {
@@ -138,7 +138,7 @@ async function scanFolder(rootPath, options, hooks) {
     const rec = cache[dir];
     if (rec && st && rec.m === st.mtimeMs) {
       reused += 1;
-      return { dirs: rec.d || [], files: rec.f || [] };
+      return { dirs: rec.d || [], files: rec.f || [], links: rec.l || [] };
     }
     let entries = [];
     try {
@@ -148,10 +148,11 @@ async function scanFolder(rootPath, options, hooks) {
     }
     const dirNames = [];
     const fileNames = [];
+    const linkNames = [];
     for (const entry of entries) {
       if (entry.isSymbolicLink()) {
         const s = await fsp.stat(nodePath.join(dir, entry.name)).catch(() => null);
-        if (s && s.isDirectory()) dirNames.push(entry.name);
+        if (s && s.isDirectory()) linkNames.push(entry.name);
         else if (s && s.isFile()) fileNames.push(entry.name);
         continue;
       }
@@ -177,8 +178,8 @@ async function scanFolder(rootPath, options, hooks) {
       }
     }
     refreshed += 1;
-    cache[dir] = { m: st ? st.mtimeMs : 0, d: dirNames, f: files };
-    return { dirs: dirNames, files: files };
+    cache[dir] = { m: st ? st.mtimeMs : 0, d: dirNames, f: files, l: linkNames };
+    return { dirs: dirNames, files: files, links: linkNames };
   };
 
   const takeDir = async (dir, node) => {
@@ -194,6 +195,14 @@ async function scanFolder(rootPath, options, hooks) {
       const child = makeNode(name, full, node.depth + 1);
       node.kids.push(child);
       queue.push([full, child]);
+    }
+    for (const name of rec.links || []) {
+      if (hidden.has(String(name).toLowerCase())) continue;
+      if (node.depth + 1 > maxDepth) continue;
+      const child = makeNode(name, nodePath.join(dir, name), node.depth + 1);
+      child.link = true;
+      node.kids.push(child);
+      /* симлинк показываем, но не раскрываем: за ним может быть что угодно */
     }
     for (const pair of rec.files) {
       node.size += pair[1];
@@ -909,6 +918,36 @@ class FolderMindmapView extends ItemView {
     new MoveModal(this.app, this.plugin, full, (dest) => this.applyMove(full, !!node.file, dest)).open();
   }
 
+  isInsideRoot(path) {
+    if (!this.rootPath) return true;
+    const rootN = normPath(this.rootPath);
+    const p = normPath(path);
+    return p === rootN || p.indexOf(rootN + nodePath.sep) === 0;
+  }
+
+  confirmOutside(dest) {
+    const message = 'Папка назначения вне открытой карты:\n' + dest + '\n\nПереместить туда?';
+    try {
+      const electron = require('electron');
+      const dialog = (electron && electron.remote && electron.remote.dialog) || (electron && electron.dialog);
+      if (dialog && typeof dialog.showMessageBoxSync === 'function') {
+        const idx = dialog.showMessageBoxSync({
+          type: 'warning',
+          buttons: ['Переместить', 'Отмена'],
+          defaultId: 1,
+          cancelId: 1,
+          noLink: true,
+          title: 'Выход за пределы карты',
+          message: message,
+        });
+        return idx === 0;
+      }
+    } catch (e) {
+      /* electron недоступен — ниже простое окно */
+    }
+    return window.confirm(message);
+  }
+
   resolveConflict(dest, name, isFile, alt) {
     const what = isFile ? 'Файл' : 'Папка';
     const detail =
@@ -944,6 +983,10 @@ class FolderMindmapView extends ItemView {
     if (normPath(target) === normPath(fullPath)) return;
     if (!isFile && normPath(dest).indexOf(normPath(fullPath) + nodePath.sep) === 0) {
       new Notice('Нельзя переместить папку внутрь себя');
+      return;
+    }
+    if (!this.isInsideRoot(dest) && !this.confirmOutside(dest)) {
+      this.setStatus('перенос отменён: папка вне открытой карты');
       return;
     }
     let finalName = name;
@@ -1186,7 +1229,9 @@ class FolderMindmapView extends ItemView {
       label.setAttribute('class', 'fm-name');
       label.setAttribute('x', '10');
       label.setAttribute('y', String(nameY));
-      label.textContent = n.file ? clipFile(n.name, nameMax) : clip(n.name, nameMax);
+      label.textContent = n.link
+        ? clip(n.name, Math.max(4, nameMax - 2)) + ' →'
+        : n.file ? clipFile(n.name, nameMax) : clip(n.name, nameMax);
       grp.appendChild(label);
 
       const size = document.createElementNS(NS, 'text');
@@ -1207,7 +1252,9 @@ class FolderMindmapView extends ItemView {
       }
 
       const tip = document.createElementNS(NS, 'title');
-      tip.textContent = n.comment ? n.name + ' — ' + n.comment : (n.file ? this.humanPath(n.path) : n.path);
+      tip.textContent = n.link
+        ? 'симлинк: ' + n.path
+        : (n.comment ? n.name + ' — ' + n.comment : (n.file ? this.humanPath(n.path) : n.path));
       grp.appendChild(tip);
 
       grp.addEventListener('click', () => this.onNodeClick(n));
@@ -1419,6 +1466,10 @@ class FolderMindmapView extends ItemView {
         this.render();
         this.focus(node._p.path);
       }
+      return;
+    }
+    if (node.link) {
+      this.setStatus('симлинк, не раскрывается: ' + node.path);
       return;
     }
     if (node.file) {

@@ -20,7 +20,7 @@
 1. Скопируйте папку плагина в `<хранилище>/.obsidian/plugins/folder-mindmap`:
 
    ```bash
-   git clone <URL-этого-репозитория> "<путь-к-хранилищу>/.obsidian/plugins/folder-mindmap"
+   git clone https://github.com/Bathert/obsidian-folder-mindmap.git "<путь-к-хранилищу>/.obsidian/plugins/folder-mindmap"
    ```
 
 2. В Obsidian: **Настройки → Сторонние плагины → Перезагрузить плагины**, затем включите «Folder Mindmap», если он выключен.

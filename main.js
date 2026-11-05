@@ -1101,11 +1101,19 @@ class FolderMindmapView extends ItemView {
       stripe.setAttribute('fill', color);
       grp.appendChild(stripe);
 
+      const right = n.file || n.pseudo
+        ? fmt(n.total)
+        : hasKids
+          ? n.kids.length + ' пап. · ' + fmt(n.total)
+          : n.files + ' ' + plural(n.files, 'файл', 'файла', 'файлов') + ' · ' + fmt(n.total);
+      const rightW = Math.ceil(right.length * 6.1);
+      const nameMax = Math.max(6, Math.floor((NODE_W - 18 - rightW) / 6.6));
+
       const label = document.createElementNS(NS, 'text');
       label.setAttribute('class', 'fm-name');
       label.setAttribute('x', '10');
       label.setAttribute('y', String(NODE_H / 2 + 0.5));
-      label.textContent = n.file ? clipFile(n.name, 27) : clip(n.name, 27);
+      label.textContent = n.file ? clipFile(n.name, nameMax) : clip(n.name, nameMax);
       grp.appendChild(label);
 
       const size = document.createElementNS(NS, 'text');
@@ -1113,20 +1121,8 @@ class FolderMindmapView extends ItemView {
       size.setAttribute('x', String(NODE_W - 8));
       size.setAttribute('y', String(NODE_H / 2 + 0.5));
       size.setAttribute('text-anchor', 'end');
-      size.textContent = !n.file && !hasKids
-        ? n.files + ' ' + plural(n.files, 'файл', 'файла', 'файлов') + ' · ' + fmt(n.total)
-        : fmt(n.total);
+      size.textContent = right;
       grp.appendChild(size);
-
-      if (hasKids && !open) {
-        const badge = document.createElementNS(NS, 'text');
-        badge.setAttribute('class', 'fm-badge');
-        badge.setAttribute('x', String(NODE_W - 8));
-        badge.setAttribute('y', String(NODE_H - 6));
-        badge.setAttribute('text-anchor', 'end');
-        badge.textContent = n.kids.length + ' пап.';
-        grp.appendChild(badge);
-      }
 
       grp.addEventListener('click', () => this.onNodeClick(n));
       grp.addEventListener('contextmenu', (e) => {

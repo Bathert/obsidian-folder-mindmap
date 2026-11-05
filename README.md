@@ -118,6 +118,15 @@ A file is shown with its extension. If the name does not fit the node, only the 
 - The map is its own `ItemView` (`folder-mindmap-view`), separate from notes.
 - No telemetry, no network requests: everything happens locally.
 
+## Data access and privacy
+
+- Read: directory listings and file sizes (`readdir`, `stat`) under the folder you open — nothing else on the disk.
+- Written: only `<plugin>/cache/` (the index and scan cache), plus the actual rename/move you asked for, including "Replace" after you confirm it in the system dialog.
+- Clipboard: the "Copy path" menu item writes the selected path to the clipboard; the plugin never reads the clipboard.
+- No network requests and no telemetry: no `fetch`, no `XMLHttpRequest`, no Obsidian `requestUrl`. Everything runs locally.
+
+The plugin requires raw file system access on purpose: the whole point is showing folders that live outside the vault.
+
 ## Project layout
 
 ```
@@ -136,6 +145,8 @@ node tests/logic.test.js main.js
 ```
 
 They cover scanning, size aggregation, counters, the child node limit and layout on a temporary tree.
+
+How to run the plugin by hand, what to keep untouched and what a pull request should look like — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Live checks (Obsidian 1.15.0): opening a folder, expanding/collapsing nodes, search with jump, toggling service folders, restoring the view after a restart, dragging files and folders (including cancelling a move and refusing to put a folder inside itself), the undo button, the system dialog on name conflicts, expanding empty folders, the index (5,208 directories / 68,525 files: first open 2.4 s, second 0.3 s, a new file is picked up by re-reading a single directory) and file name search from the index.
 

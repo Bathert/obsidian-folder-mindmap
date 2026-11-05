@@ -106,6 +106,12 @@ w(path.join('node_modules', 'pkg', 'index.js'), 4096);
   const json = JSON.stringify(root, (k, v) => (k.charAt(0) === '_' ? undefined : v));
   assert(json.length > 50 && json.indexOf('"_p"') < 0, 'сериализация без служебных ссылок');
 
+  // индекс: повторный проход по неизменённой папке берёт записи из индекса
+  assert(res.index && res.index.dirs && Object.keys(res.index.dirs).length >= 3, 'индекс содержит записи каталогов');
+  const second = await lib.scanFolder(tmp, { hiddenNames: ['node_modules'], maxDepth: 10, index: res.index });
+  assert(second.stats.dirs === res.stats.dirs && second.root.total === res.root.total, 'размеры из индекса совпадают');
+  assert(second.stats.refreshed === 0 && second.stats.reused >= second.stats.dirs, 'повторный проход не перечитывает файлы (' + second.stats.reused + ' переиспользовано, ' + second.stats.refreshed + ' перечитано)');
+
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log(process.exitCode ? 'ЕСТЬ ОШИБКИ' : 'все проверки прошли');
 })();

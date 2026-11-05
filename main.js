@@ -62,6 +62,7 @@ function aggregate(node) {
   return node.total;
 }
 
+const INDEX_VERSION = 1;
 const SCAN_CONCURRENCY = 8;
 
 async function scanFolder(rootPath, options, hooks) {
@@ -72,6 +73,10 @@ async function scanFolder(rootPath, options, hooks) {
   const started = Date.now();
   const fsp = fs.promises;
 
+  const cache = options.index && options.index.v === INDEX_VERSION ? options.index.dirs || {} : {};
+  let reused = 0;
+  let refreshed = 0;
+
   const rootName = nodePath.basename(rootPath) || rootPath;
   const root = makeNode(rootName, rootPath, 0);
   if (!fs.existsSync(rootPath)) throw new Error('папка не найдена');
@@ -79,59 +84,69 @@ async function scanFolder(rootPath, options, hooks) {
   const queue = [[rootPath, root]];
   let seen = 0;
 
-  const takeDir = async (dir, node) => {
+  const readDir = async (dir) => {
+    const st = await fsp.stat(dir).catch(() => null);
+    const rec = cache[dir];
+    if (rec && st && rec.m === st.mtimeMs) {
+      reused += 1;
+      return { dirs: rec.d || [], files: rec.f || [] };
+    }
     let entries = [];
     try {
       entries = await fsp.readdir(dir, { withFileTypes: true });
     } catch (e) {
+      return null;
+    }
+    const dirNames = [];
+    const fileNames = [];
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) {
+        const s = await fsp.stat(nodePath.join(dir, entry.name)).catch(() => null);
+        if (s && s.isDirectory()) dirNames.push(entry.name);
+        else if (s && s.isFile()) fileNames.push(entry.name);
+        continue;
+      }
+      if (entry.isDirectory()) dirNames.push(entry.name);
+      else if (entry.isFile()) fileNames.push(entry.name);
+    }
+    const files = [];
+    const CHUNK = 32;
+    for (let i = 0; i < fileNames.length; i += CHUNK) {
+      const slice = fileNames.slice(i, i + CHUNK);
+      const sizes = await Promise.all(slice.map((n) => fsp.stat(nodePath.join(dir, n)).then((s) => s.size).catch(() => null)));
+      for (let j = 0; j < slice.length; j++) {
+        if (sizes[j] !== null) files.push([slice[j], sizes[j]]);
+      }
+    }
+    refreshed += 1;
+    cache[dir] = { m: st ? st.mtimeMs : 0, d: dirNames, f: files };
+    return { dirs: dirNames, files: files };
+  };
+
+  const takeDir = async (dir, node) => {
+    const rec = await readDir(dir);
+    if (!rec) {
       node.error = true;
       return;
     }
-    const subdirs = [];
-    const files = [];
-    for (const entry of entries) {
-      const full = nodePath.join(dir, entry.name);
-      if (entry.isSymbolicLink()) {
-        let st = null;
-        try {
-          st = await fsp.stat(full);
-        } catch (e) {
-          st = null;
-        }
-        if (st && st.isDirectory()) subdirs.push({ name: entry.name, full: full });
-        else if (st && st.isFile()) files.push({ name: entry.name, full: full });
-        continue;
-      }
-      if (entry.isDirectory()) subdirs.push({ name: entry.name, full: full });
-      else if (entry.isFile()) files.push({ name: entry.name, full: full });
-    }
-
-    for (const d of subdirs) {
-      if (hidden.has(d.name.toLowerCase())) continue;
+    for (const name of rec.dirs) {
+      if (hidden.has(String(name).toLowerCase())) continue;
       if (node.depth + 1 > maxDepth) continue;
-      const child = makeNode(d.name, d.full, node.depth + 1);
+      const full = nodePath.join(dir, name);
+      const child = makeNode(name, full, node.depth + 1);
       node.kids.push(child);
-      queue.push([d.full, child]);
+      queue.push([full, child]);
     }
-
-    const CHUNK = 32;
-    for (let i = 0; i < files.length; i += CHUNK) {
-      const slice = files.slice(i, i + CHUNK);
-      const sizes = await Promise.all(slice.map((f) => fsp.stat(f.full).then((st) => st.size).catch(() => null)));
-      for (let j = 0; j < slice.length; j++) {
-        if (sizes[j] === null) continue;
-        node.size += sizes[j];
-        node.files += 1;
-        node.fileList.push({ n: slice[j].name, s: sizes[j] });
-      }
+    for (const pair of rec.files) {
+      node.size += pair[1];
+      node.files += 1;
+      node.fileList.push({ n: pair[0], s: pair[1] });
     }
-
     if (node.fileList.length > MAX_FILE_LIST) {
       node.fileList.sort((a, b) => b.s - a.s);
       node.moreFiles = node.fileList.length - MAX_FILE_LIST;
       node.fileList.length = MAX_FILE_LIST;
     }
-
     seen += 1;
     if (seen % 20 === 0 && onProgress) onProgress(seen, node.path);
   };
@@ -155,9 +170,11 @@ async function scanFolder(rootPath, options, hooks) {
     files: totalFiles,
     size: root.total,
     deep: root.deep,
+    reused: reused,
+    refreshed: refreshed,
   };
   if (onProgress) onProgress(seen, rootPath);
-  return { root: root, stats: stats };
+  return { root: root, stats: stats, index: { v: INDEX_VERSION, path: rootPath, dirs: cache } };
 }
 
 function countFiles(node) {
@@ -536,6 +553,7 @@ class FolderMindmapView extends ItemView {
     this.suppressClick = false;
     this.undoStack = [];
     this.clickTimer = null;
+    this.indexDirs = {};
   }
 
   getViewType() {
@@ -653,14 +671,8 @@ class FolderMindmapView extends ItemView {
     this.showFiles = this.plugin.settings.showFiles !== false;
     if (this.filesBtn) this.filesBtn.toggleClass('on', this.showFiles);
 
-    if (!force) {
-      const cached = await this.plugin.readCache(this.rootPath);
-      if (cached) {
-        this.applyTree(cached.root, cached.stats);
-        this.setStatus('из кэша · ' + this.describe());
-        return;
-      }
-    }
+    const index = await this.plugin.readIndex(this.rootPath);
+    this.indexDirs = index ? index.dirs : {};
 
     this.setStatus('сканирую ' + this.rootPath + '…');
     this.svg.addClass('fm-busy');
@@ -670,12 +682,17 @@ class FolderMindmapView extends ItemView {
         (seen, current) => {
           if (token === this.loadToken) this.setStatus('сканирую… ' + seen + ' ' + plural(seen, 'каталог', 'каталога', 'каталогов'));
         },
-        () => token !== this.loadToken
+        () => token !== this.loadToken,
+        index
       );
       if (token !== this.loadToken) return;
+      this.indexDirs = result.index.dirs;
       this.applyTree(result.root, result.stats);
-      this.setStatus(this.describe() + ' · ' + (Math.round(result.stats.ms / 100) / 10).toFixed(1).replace('.', ',') + ' с');
-      void this.plugin.writeCache(this.rootPath, result);
+      const idxNote = result.stats.refreshed && result.stats.refreshed < result.stats.dirs
+        ? ' · обновлено ' + result.stats.refreshed + ' ' + plural(result.stats.refreshed, 'папка', 'папки', 'папок')
+        : '';
+      this.setStatus(this.describe() + ' · ' + (Math.round(result.stats.ms / 100) / 10).toFixed(1).replace('.', ',') + ' с' + idxNote);
+      void this.plugin.writeIndex(this.rootPath, result.index);
     } catch (e) {
       if (token !== this.loadToken) return;
       this.setStatus('ошибка: ' + e.message);
@@ -1368,12 +1385,27 @@ class FolderMindmapView extends ItemView {
     const q = this.searchEl.value.trim().toLowerCase();
     this.resultsEl.empty();
     if (q.length < 2 || !this.tree) return;
-    const hits = this.flat.filter((n) => n.path !== this.tree.path && n.name.toLowerCase().indexOf(q) >= 0).slice(0, 30);
-    if (!hits.length) {
+    const folderHits = this.flat
+      .filter((n) => n.path !== this.tree.path && n.name.toLowerCase().indexOf(q) >= 0)
+      .slice(0, 20);
+    const fileHits = [];
+    const dirs = this.indexDirs || {};
+    for (const dir of Object.keys(dirs)) {
+      const rec = dirs[dir];
+      const list = rec && rec.f ? rec.f : [];
+      for (const pair of list) {
+        if (String(pair[0]).toLowerCase().indexOf(q) >= 0) {
+          fileHits.push({ name: pair[0], size: pair[1], dir: dir });
+          if (fileHits.length >= 20) break;
+        }
+      }
+      if (fileHits.length >= 20) break;
+    }
+    if (!folderHits.length && !fileHits.length) {
       this.resultsEl.createDiv({ cls: 'fm-result fm-empty', text: 'ничего не найдено' });
       return;
     }
-    for (const hit of hits) {
+    for (const hit of folderHits) {
       const row = this.resultsEl.createDiv({ cls: 'fm-result' });
       row.createSpan({ cls: 'fm-result-name', text: hit.name });
       row.createSpan({ cls: 'fm-result-path', text: fmt(hit.total) + ' · ' + hit.path });
@@ -1382,6 +1414,23 @@ class FolderMindmapView extends ItemView {
         this.reveal(hit);
       });
     }
+    for (const hit of fileHits) {
+      const row = this.resultsEl.createDiv({ cls: 'fm-result fm-result-file' });
+      row.createSpan({ cls: 'fm-result-name', text: hit.name });
+      row.createSpan({ cls: 'fm-result-path', text: fmt(hit.size) + ' · ' + hit.dir });
+      row.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        this.revealFile(hit);
+      });
+    }
+  }
+
+  revealFile(hit) {
+    this.resultsEl.empty();
+    this.searchEl.value = '';
+    const folder = this.findFolder(hit.dir);
+    if (folder) this.reveal(folder);
+    this.setStatus('файл: ' + nodePath.join(hit.dir, hit.name) + ' · ' + fmt(hit.size));
   }
 
   humanDir(path) {
@@ -1511,22 +1560,12 @@ class FolderMindmapSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName('Кэш, минут')
-      .setDesc('Сколько держать результат сканирования. 0 — не кэшировать.')
-      .addSlider((s) =>
-        s
-          .setLimits(0, 240, 5)
-          .setValue(this.plugin.settings.cacheMinutes)
-          .setDynamicTooltip()
-          .onChange(async (v) => {
-            this.plugin.settings.cacheMinutes = v;
-            await this.plugin.saveSettings();
-          })
-      );
+      .setName('Индекс')
+      .setDesc('Индекс папок хранится в папке плагина и обновляется по времени изменения каталогов: неизменённые папки повторно не читаются. Кэш по таймеру больше не используется.');
 
     new Setting(containerEl)
       .setName('Очистить кэш')
-      .setDesc('Удалить сохранённые результаты сканирования.')
+      .setDesc('Удалить сохранённые результаты сканирования и индекс папок.')
       .addButton((b) =>
         b.setButtonText('Очистить').onClick(async () => {
           const dir = this.plugin.cacheDir();
@@ -1600,11 +1639,36 @@ class FolderMindmapPlugin extends Plugin {
     );
   }
 
-  async scan(path, onProgress, isCancelled) {
+  async scan(path, onProgress, isCancelled, index) {
     return scanFolder(path, {
       hiddenNames: String(this.settings.hiddenNames || '').split(/[,\n;]/).map((s) => s.trim()).filter(Boolean),
       maxDepth: this.settings.maxDepth,
+      index: index,
     }, { onProgress: onProgress, isCancelled: isCancelled });
+  }
+
+  indexFile(path) {
+    return nodePath.join(this.cacheDir(), 'idx-' + hashPath(path) + '.json');
+  }
+
+  async readIndex(path) {
+    try {
+      const raw = await fs.promises.readFile(this.indexFile(path), 'utf8');
+      const data = JSON.parse(raw);
+      if (!data || data.v !== INDEX_VERSION || !data.dirs) return null;
+      return data;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  async writeIndex(path, index) {
+    try {
+      await fs.promises.mkdir(this.cacheDir(), { recursive: true });
+      await fs.promises.writeFile(this.indexFile(path), JSON.stringify(index), 'utf8');
+    } catch (e) {
+      /* индекс не критичен для работы карты */
+    }
   }
 
   dropCache(path) {
@@ -1616,8 +1680,10 @@ class FolderMindmapPlugin extends Plugin {
   }
 
   cacheDir() {
-    const base = this.manifest.dir || nodePath.join(this.app.vault.adapter.basePath, '.obsidian', 'plugins', 'folder-mindmap');
-    return nodePath.join(base, 'cache');
+    const rel = this.manifest.dir || nodePath.join('.obsidian', 'plugins', 'folder-mindmap');
+    const base = (this.app.vault.adapter && this.app.vault.adapter.basePath) || '';
+    const dir = nodePath.isAbsolute(rel) ? rel : nodePath.join(base, rel);
+    return nodePath.join(dir, 'cache');
   }
 
   async readCache(path) {

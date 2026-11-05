@@ -213,6 +213,10 @@
   pointer-events: none;
 }
 
+.fm-result.fm-result-file .fm-result-name {
+  color: var(--text-muted);
+}
+
 .fm-node.fm-pseudo .fm-box {
   stroke-dasharray: 4 3;
   opacity: 0.75;

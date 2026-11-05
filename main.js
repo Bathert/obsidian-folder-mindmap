@@ -4,7 +4,7 @@ const obsidian = require('obsidian');
 const fs = require('fs');
 const nodePath = require('path');
 
-const { Plugin, ItemView, Modal, Notice, PluginSettingTab, Setting, Menu } = obsidian;
+const { Plugin, ItemView, Modal, Notice, PluginSettingTab, Setting, Menu, MarkdownRenderer } = obsidian;
 
 const VIEW_TYPE = 'folder-mindmap-view';
 const COL_W = 300;
@@ -594,6 +594,84 @@ class MoveModal extends Modal {
 
 /* ------------------------------------------------------------------- view */
 
+class PreviewModal extends Modal {
+  constructor(app, view, node) {
+    super(app);
+    this.view = view;
+    this.node = node;
+  }
+
+  async onOpen() {
+    const full = this.view.humanPath(this.node.path);
+    this.titleEl.setText(this.node.name);
+    this.modalEl.addClass('fm-preview-modal');
+    const body = this.contentEl.createDiv({ cls: 'fm-preview' });
+    body.createDiv({ cls: 'fm-preview-meta', text: fmt(this.node.total) + ' · ' + full });
+    if (this.node.comment) body.createDiv({ cls: 'fm-preview-comment', text: this.node.comment });
+
+    const ext = (nodePath.extname(full) || '').toLowerCase();
+    const images = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.avif'];
+    const audios = ['.mp3', '.wav', '.m4a', '.ogg', '.flac'];
+    const videos = ['.mp4', '.webm', '.mov', '.m4v'];
+    const texts = ['.md', '.txt', '.json', '.js', '.css', '.html', '.yml', '.yaml', '.csv', '.log', '.ini', '.xml'];
+    const MAX_INLINE = 25 * 1024 * 1024;
+
+    const dataUrl = async () => {
+      const buf = await fs.promises.readFile(full);
+      const mime = {
+        '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
+        '.webp': 'image/webp', '.bmp': 'image/bmp', '.svg': 'image/svg+xml', '.avif': 'image/avif',
+        '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.m4a': 'audio/mp4', '.ogg': 'audio/ogg', '.flac': 'audio/flac',
+        '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime', '.m4v': 'video/mp4',
+      }[ext] || 'application/octet-stream';
+      return 'data:' + mime + ';base64,' + buf.toString('base64');
+    };
+
+    try {
+      if (images.indexOf(ext) >= 0) {
+        const img = body.createEl('img', { cls: 'fm-preview-img' });
+        img.src = await dataUrl();
+        return;
+      }
+      if (audios.indexOf(ext) >= 0) {
+        const audio = body.createEl('audio', { cls: 'fm-preview-media' });
+        audio.controls = true;
+        audio.src = await dataUrl();
+        return;
+      }
+      if (videos.indexOf(ext) >= 0) {
+        if (this.node.total > MAX_INLINE) {
+          body.createDiv({ cls: 'fm-preview-note', text: 'Видео больше 25 МБ — откройте файл в плеере («Открыть»).' });
+          return;
+        }
+        const video = body.createEl('video', { cls: 'fm-preview-media' });
+        video.controls = true;
+        video.src = await dataUrl();
+        return;
+      }
+      if (texts.indexOf(ext) >= 0) {
+        const raw = await fs.promises.readFile(full, 'utf8');
+        const cut = raw.length > 20000 ? raw.slice(0, 20000) + '\n…' : raw;
+        if (ext === '.md') {
+          const holder = body.createDiv({ cls: 'fm-preview-md markdown-rendered' });
+          await MarkdownRenderer.render(this.app, cut, holder, full, this.view);
+        } else {
+          body.createEl('pre', { cls: 'fm-preview-text', text: cut });
+        }
+        return;
+      }
+      body.createDiv({ cls: 'fm-preview-note', text: 'Предпросмотр для этого типа файла не поддерживается — «Открыть».' });
+    } catch (e) {
+      body.createDiv({ cls: 'fm-preview-note', text: 'Не удалось прочитать файл: ' + e.message });
+    }
+  }
+
+  onClose() {
+    if (this.view && this.view.previewModal === this) this.view.previewModal = null;
+    this.contentEl.empty();
+  }
+}
+
 class FolderMindmapView extends ItemView {
   constructor(leaf, plugin) {
     super(leaf);
@@ -624,6 +702,8 @@ class FolderMindmapView extends ItemView {
     this.undoStack = [];
     this.clickTimer = null;
     this.indexDirs = {};
+    this.hoverNode = null;
+    this.previewModal = null;
   }
 
   getViewType() {
@@ -705,6 +785,22 @@ class FolderMindmapView extends ItemView {
     canvas.appendChild(this.svg);
 
     this.statusEl = root.createDiv({ cls: 'fm-status', text: 'папка не выбрана' });
+
+    this.registerDomEvent(document, 'keydown', (e) => {
+      if (e.code !== 'Space' && e.key !== ' ') return;
+      const ae = document.activeElement;
+      if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return;
+      if (this.app.workspace.activeLeaf !== this.leaf) return;
+      const n = this.hoverNode;
+      if (!n || !n.file) return;
+      e.preventDefault();
+      if (this.previewModal) {
+        this.previewModal.close();
+        return;
+      }
+      this.previewModal = new PreviewModal(this.app, this, n);
+      this.previewModal.open();
+    });
 
     this.registerDomEvent(this.svg, 'wheel', (e) => this.onWheel(e), { passive: false });
     this.registerDomEvent(this.svg, 'pointerdown', (e) => this.onDown(e));
@@ -1103,9 +1199,74 @@ class FolderMindmapView extends ItemView {
     if (this.undoBtn) this.undoBtn.toggleClass('fm-disabled', this.undoStack.length === 0);
   }
 
+  vaultFile(full) {
+    const base = (this.app.vault.adapter && this.app.vault.adapter.basePath) || '';
+    if (!base) return null;
+    const norm = (s) => String(s).split('/').join('\\').toLowerCase();
+    const baseN = norm(base) + '\\';
+    if (norm(full).indexOf(baseN) !== 0) return null;
+    const rel = String(full).slice(base.length + 1).split('\\').join('/');
+    return this.app.vault.getAbstractFileByPath(rel) || null;
+  }
+
+  async openNode(node, newTab) {
+    const full = node.file ? this.humanPath(node.path) : node.path;
+    if (!node.file) {
+      this.openInExplorer(full);
+      return;
+    }
+    const file = this.vaultFile(full);
+    if (file) {
+      try {
+        const leaf = this.app.workspace.getLeaf(newTab ? 'tab' : false);
+        await leaf.openFile(file);
+        this.setStatus('открыто: ' + full);
+      } catch (e) {
+        new Notice('Не удалось открыть: ' + e.message);
+      }
+      return;
+    }
+    try {
+      const electron = require('electron');
+      const shell = electron && electron.shell;
+      if (!shell || !shell.openPath) {
+        new Notice('Открытие системным приложением недоступно');
+        return;
+      }
+      const err = await shell.openPath(full);
+      if (err) new Notice('Не удалось открыть: ' + err);
+      else this.setStatus('открыто системным приложением: ' + full);
+    } catch (e) {
+      new Notice('Не удалось открыть: ' + e.message);
+    }
+  }
+
+  openInExplorer(full) {
+    try {
+      const electron = require('electron');
+      const shell = electron && electron.shell;
+      if (!shell || !shell.showItemInFolder) {
+        new Notice('Проводник недоступен');
+        return;
+      }
+      shell.showItemInFolder(full);
+      this.setStatus('в проводнике: ' + full);
+    } catch (e) {
+      new Notice('Проводник недоступен: ' + e.message);
+    }
+  }
+
   openMenu(node, evt) {
     const full = node.file ? this.humanPath(node.path) : node.path;
     const menu = new Menu();
+    if (node.file) {
+      menu.addItem((i) => i.setTitle('Открыть').setIcon('file-symlink').onClick(() => { void this.openNode(node, false); }));
+      menu.addItem((i) => i.setTitle('Открыть в новой вкладке').setIcon('plus').onClick(() => { void this.openNode(node, true); }));
+      menu.addItem((i) => i.setTitle('Предпросмотр').setIcon('eye').onClick(() => new PreviewModal(this.app, this, node).open()));
+      menu.addSeparator();
+    }
+    menu.addItem((i) => i.setTitle('Открыть в проводнике').setIcon('folder-open').onClick(() => this.openInExplorer(full)));
+    menu.addSeparator();
     menu.addItem((i) => i.setTitle('Переименовать').setIcon('pencil').onClick(() => this.renameNode(node)));
     menu.addItem((i) => i.setTitle('Переместить').setIcon('folder-input').onClick(() => this.moveNode(node)));
     menu.addSeparator();
@@ -1257,7 +1418,9 @@ class FolderMindmapView extends ItemView {
         : (n.comment ? n.name + ' — ' + n.comment : (n.file ? this.humanPath(n.path) : n.path));
       grp.appendChild(tip);
 
-      grp.addEventListener('click', () => this.onNodeClick(n));
+      grp.addEventListener('click', (e) => this.onNodeClick(n, e));
+      grp.addEventListener('mouseenter', () => { this.hoverNode = n; });
+      grp.addEventListener('mouseleave', () => { if (this.hoverNode === n) this.hoverNode = null; });
       grp.addEventListener('contextmenu', (e) => {
         e.preventDefault();
         this.openMenu(n, e);
@@ -1436,10 +1599,20 @@ class FolderMindmapView extends ItemView {
     this.applyMove(full, !!src.file, dest);
   }
 
-  onNodeClick(node) {
+  onNodeClick(node, e) {
     if (this.suppressClick) {
       this.suppressClick = false;
       return;
+    }
+    if (e && (e.ctrlKey || e.metaKey)) {
+      if (node.file) {
+        void this.openNode(node, !!e.shiftKey);
+        return;
+      }
+      if (node.link) {
+        this.openInExplorer(node.path);
+        return;
+      }
     }
     if (this.clickTimer) clearTimeout(this.clickTimer);
     this.clickTimer = setTimeout(() => {

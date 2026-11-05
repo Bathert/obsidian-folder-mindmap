@@ -54,6 +54,9 @@ Requirements: Obsidian 1.4.0+ on desktop. The plugin does not work on mobile: it
 | "2 lv." / "3 lv." / "all" | expand the map to 2, 3 or all levels (with a guard against too many nodes) |
 | right click a node | "Rename", "Move", "Copy path" |
 | double click a node | rename the folder or file |
+| Ctrl/Cmd + click a file | open it: notes inside the vault in Obsidian, anything else in the system app |
+| Space over a file | preview: images, notes, plain text, audio, video |
+| right click → "Open" / "Open in new tab" / "Preview" / "Open in Explorer" | the same actions from the menu |
 | drag a node | drop a file or folder onto another folder to move it |
 | "undo" | undo the last move or rename |
 | "collapse" | collapse everything down to the root |
@@ -125,6 +128,13 @@ With the "comments" toggle on, the map draws that value under the file name as a
 - For notes inside the vault the value comes from the Obsidian metadata cache, so scanning stays fast and nothing extra is read from disk.
 - For files outside the vault (and for dot-folders Obsidian does not index) the first 4 KB of the file is read and its frontmatter parsed.
 - Multi-line values (`|`, `>`) are skipped — the map shows single-line properties only.
+
+## Opening and preview
+
+- Ctrl/Cmd + click a file opens it: notes and other types Obsidian understands (markdown, images, PDF, audio) open in an Obsidian tab, everything else goes to the system default application through Electron `shell.openPath`. Shift + Ctrl/Cmd opens in a new tab.
+- Space over a hovered file opens a preview: images inline, markdown rendered, plain text in a monospace block, audio and short video with a player. Unsupported types show size, path and a hint.
+- The right-click menu has "Open", "Open in new tab", "Preview" and "Open in Explorer"; the last one works for folders too.
+- Previews read the file locally (text up to 20k characters, media up to 25 MB) and render in place — nothing is uploaded.
 
 ## File names
 

@@ -1,138 +1,151 @@
 # Folder Mindmap
 
-Плагин Obsidian, который показывает любую папку как интерактивную карту: раскрывающиеся узлы, размеры, количество файлов, поиск и базовые файловые операции прямо на карте. Работает и с папками внутри хранилища, и с любыми каталогами на диске (например, `E:\Мой диск`).
+An Obsidian plugin that turns any folder into an interactive mind map: collapsible nodes, sizes, file counts, search and basic file operations right on the map. It works with folders inside the vault and with any directory on disk (for example `E:\My Drive`).
 
-## Возможности
+Русская версия: [README.ru.md](README.ru.md)
 
-- **Команда «Открыть карту папки…»** — диалог с полным путём; можно вызвать из палитры команд или кнопкой в ленте.
-- **Команда «Открыть карту последней папки»** — сразу открывает первую папку из настроек.
-- Показывает и папки, и файлы: файлы идут пунктирными узлами с размером, лишние скрываются под «ещё N файлов».
-- Считает структуру только чтением: имена, размеры, число файлов. Без явной команды ничего не изменяется.
-- Индекс папок: при повторном открытии перечитываются только изменившиеся каталоги, остальные берутся из индекса — открытие занимает доли секунды.
-- Поиск по именам файлов: строка поиска находит и папки, и файлы во всём проиндексированном дереве.
-- Восстанавливает вид карты после перезапуска: раскрытые узлы, положение и масштаб.
-- Читает диск параллельно (8 потоков) и не блокирует интерфейс: папка на 5 200 каталогов и 68 500 файлов на C: читается ~1,8 с против ~26 с у последовательного обхода.
-- Служебные папки (`node_modules`, `.git`, `__pycache__` и т. п.) скрываются одним переключателем.
-- Переименование и перемещение папок и файлов из контекстного меню узла.
+## Why this exists
 
-## Установка
+I love Obsidian. So I see no reason why it can't also help me keep the folder structure on my computer in order — not just the notes inside the vault.
 
-Плагин не публикуется в каталоге Obsidian, ставится вручную.
+## Features
 
-1. Скопируйте папку плагина в `<хранилище>/.obsidian/plugins/folder-mindmap`:
+- **Command "Open folder map…"** — dialog with a full path; available from the command palette or the ribbon button.
+- **Command "Open last folder map"** — opens the first folder from the settings right away.
+- Shows folders and files: files are dashed nodes with their size, the rest collapses into "N more files".
+- Reads the structure only: names, sizes, file counts. Nothing is changed without an explicit command.
+- Folder index: on the next open only changed directories are re-read, the rest come from the index — opening takes a fraction of a second.
+- Search by file names: the search box finds both folders and files across the indexed tree.
+- Restores the map view after a restart: expanded nodes, pan and zoom.
+- Reads the disk in parallel (8 workers) without blocking the UI: a folder with 5,200 directories and 68,500 files on C: is read in ~1.8 s versus ~26 s with a sequential walk.
+- Service folders (`node_modules`, `.git`, `__pycache__` and similar) are hidden with one toggle.
+- Rename and move folders and files from the node context menu.
+
+## Installation
+
+### From the community plugins (after review)
+
+Settings → Community plugins → Browse → search for "Folder Mindmap" → Install → Enable.
+
+### Manually
+
+1. Put the plugin folder into `<vault>/.obsidian/plugins/folder-mindmap`:
 
    ```bash
-   git clone https://github.com/Bathert/obsidian-folder-mindmap.git "<путь-к-хранилищу>/.obsidian/plugins/folder-mindmap"
+   git clone https://github.com/Bathert/obsidian-folder-mindmap.git "<vault>/.obsidian/plugins/folder-mindmap"
    ```
 
-2. В Obsidian: **Настройки → Сторонние плагины → Перезагрузить плагины**, затем включите «Folder Mindmap», если он выключен.
+2. In Obsidian: **Settings → Community plugins → Reload plugins**, then enable "Folder Mindmap" if it is off.
 
-Либо просто положите `manifest.json`, `main.js`, `styles.css` в папку `folder-mindmap` внутри `.obsidian/plugins`.
+Alternatively copy `manifest.json`, `main.js` and `styles.css` into a `folder-mindmap` folder inside `.obsidian/plugins`.
 
-Требования: Obsidian 1.4.0+ для десктопа. На мобильных плагин не работает — он читает файловую систему через Node.js.
+Requirements: Obsidian 1.4.0+ on desktop. The plugin does not work on mobile: it reads the file system through Node.js.
 
-## Управление в карте
+## Using the map
 
-| Действие | Что делает |
+| Action | What it does |
 |---|---|
-| клик по папке | раскрыть / свернуть ветку; пустая папка раскрывается с пометкой «пусто» |
-| «ещё N» | показать остальные папки узла (если их больше лимита) |
-| колесо мыши | масштаб |
-| перетаскивание фона | сдвиг карты |
-| поиск | находит папку или файл по имени, раскрывает путь и подсвечивает папку |
-| «2 ур.» / «3 ур.» / «все» | раскрыть карту на 2, 3 или все уровни (с защитой от слишком большого числа узлов) |
-| правый клик по узлу | «Переименовать», «Переместить», «Копировать путь» |
-| двойной клик по узлу | переименовать папку или файл |
-| перетаскивание узла | бросить файл или папку на другую папку — переместить |
-| «отменить» | вернуть последнее перемещение или переименование |
-| «свернуть» | свернуть всё до корня |
-| «служебные» | показать / скрыть `node_modules`, `.git`, `__pycache__` и подобные |
-| «файлы» | показать / скрыть файлы (по умолчанию включены) |
-| «обновить» | перечитать папку заново (неизменённые каталоги всё равно берутся из индекса) |
-| ⛶ | вписать карту в окно |
+| click a folder | expand / collapse the branch; an empty folder expands with a "пусто" (empty) marker |
+| "ещё N" | show the remaining folders of a node (when there are more than the limit) |
+| mouse wheel | zoom |
+| drag the background | pan the map |
+| search | finds a folder or file by name, expands the path and highlights the folder |
+| "2 ур." / "3 ур." / "все" | expand the map to 2, 3 or all levels (with a guard against too many nodes) |
+| right click a node | "Rename", "Move", "Copy path" |
+| double click a node | rename the folder or file |
+| drag a node | drop a file or folder onto another folder to move it |
+| "отменить" | undo the last move or rename |
+| "свернуть" | collapse everything down to the root |
+| "служебные" | show / hide `node_modules`, `.git`, `__pycache__` and similar |
+| "файлы" | show / hide files (on by default) |
+| "обновить" | re-read the folder (unchanged directories still come from the index) |
+| ⛶ | fit the map to the window |
 
-## Настройки
+The interface is currently in Russian; the labels above are the literal button captions.
 
-- **Папки по умолчанию** — по одной на строку; первая подставляется в диалоге и открывается командой «последняя папка».
-- **Служебные папки** — имена через запятую; они не показываются и не участвуют в подсчёте размеров.
-- **Папок на узел** — сколько дочерних папок показывать сразу (остальные под «ещё N»), по умолчанию 45.
-- **Показывать файлы** — выводить файлы рядом с папками.
-- **Файлов на узел** — сколько файлов показывать в одной папке, по умолчанию 10.
-- **Глубина чтения** — ограничение вложенности при сканировании, по умолчанию 14.
-- **Индекс** — хранится в папке плагина, обновляется по времени изменения каталогов; кэш по таймеру больше не используется.
-- **Очистить кэш** — удалить индекс и сохранённые сканы.
+## Settings
 
-## Переименование и перемещение
+- **Default folders** — one per line; the first one is prefilled in the dialog and opened by the "last folder" command.
+- **Service folders** — comma-separated names; they are not shown and do not count towards sizes.
+- **Folders per node** — how many child folders to show at once (the rest go under "ещё N"), 45 by default.
+- **Show files** — render files next to folders.
+- **Files per node** — how many files to show inside one folder, 10 by default.
+- **Read depth** — nesting limit while scanning, 14 by default.
+- **Index** — stored in the plugin folder and updated by directory modification time; the timer-based cache is no longer used.
+- **Clear cache** — delete the index and saved scans.
 
-Правый клик по любому узлу — папке или файлу:
+## Rename and move
 
-- **Переименовать** — диалог с текущим именем; курсор ставится перед расширением, чтобы его было удобно сохранить или заменить. Недопустимые символы и занятое имя отклоняются.
-- **Переместить** — диалог с путём папки-назначения (по умолчанию — текущая папка, снизу сохранённые пути). Копирование между дисками обрабатывается автоматически.
-- **Копировать путь** — полный путь в буфер обмена.
+Right click any node — folder or file:
 
-После операции дерево, размеры и кэш обновляются сразу, пересканировать вручную не нужно.
+- **Rename** — dialog with the current name; the caret is placed before the extension so it is easy to keep or replace. Invalid characters and taken names are rejected.
+- **Move** — dialog with the destination path (current folder by default, saved paths below). Cross-drive copies are handled automatically.
+- **Copy path** — full path to the clipboard.
 
-## Перетаскивание
+After the operation the tree, sizes and index are updated immediately; no manual rescan is needed.
 
-Тяните любой узел мышью: под курсором появляется подпись, подходящая папка-получатель подсвечивается акцентной рамкой, исходный узел бледнеет. Отпустите над папкой — файл или папка переедет туда, дерево и кэш обновятся сразу.
+## Drag and drop
 
-Бросить нельзя: на файл (только в папку), на сам узел и внутрь собственной папки — такие цели не подсвечиваются. Отпускание на пустом месте отменяет перенос.
+Drag any node with the mouse: a label follows the cursor, a valid destination folder gets an accent border, the source node fades. Drop it on a folder and the file or folder moves there; tree and index update at once.
 
-У папки без подпапок слева от размера пишется число файлов — «0 файлов · 0 Б», «3 файла · 1,2 МБ»; у папки с подпапками — число подпапок: «2 пап. · 14,1 МБ». Всё в одной строке справа, поэтому имя обрезается под оставшуюся ширину. Такая папка без подпапок раскрывается: внутри либо её файлы, либо пометка «пусто».
+Not allowed: dropping onto a file (folders only), onto the node itself, or into its own subtree — such targets are not highlighted. Releasing over empty space cancels the move.
 
-Если в папке-получателе уже есть файл или папка с таким же именем, плагин показывает системное окно с выбором: «Заменить» (старый объект удаляется безвозвратно), «Переименовать» (новый получит имя вида `файл (2).txt`) или «Отмена» (перенос не выполняется).
+A folder without subfolders shows its file count next to the size — "0 файлов · 0 Б", "3 файла · 1,2 МБ"; a folder with subfolders shows the number of subfolders: "2 пап. · 14,1 МБ". Everything sits on one line on the right, so the name is clipped to the remaining width. Such a folder without subfolders also expands: inside there are either its files or a "пусто" marker.
 
-Ошиблись — кнопка «отменить» в панели возвращает последнее перемещение или переименование (история в пределах сессии).
+If the destination folder already contains an object with the same name, the plugin shows the native system dialog: **Replace** (the old object is deleted permanently), **Rename** (the new one becomes `file (2).txt`) or **Cancel** (nothing is moved).
 
-## Индекс и поиск
+Mistake? The "отменить" button in the toolbar reverts the last move or rename (history lasts for the session).
 
-Индекс папки лежит в `<плагин>/cache/idx-<hash>.json` и хранит по каждому каталогу его mtime, имена подпапок и файлов с размерами.
+## Index and search
 
-- При открытии карты для каждого каталога делается один `stat`: если mtime совпал с индексом, содержимое берётся из индекса и файлы повторно не обстатируются.
-- Изменился каталог (добавили, удалили, переименовали внутри) — перечитывается только он.
-- Скрытые имена и глубина применяются при сборке дерева, поэтому переключение «служебные» не сбрасывает индекс.
-- Поиск идёт по папкам карты и по всем файлам из индекса: результат показывает имя, размер и папку; клик раскрывает эту папку на карте.
+The folder index lives in `<plugin>/cache/idx-<hash>.json` and stores, per directory, its mtime, names of subfolders and files with their sizes.
 
-## Имена файлов
+- When the map opens, each directory gets a single `stat`: if the mtime matches the index, the contents come from the index and files are not stat-ed again.
+- A directory that changed (something added, removed or renamed inside) is re-read on its own.
+- Hidden names and depth are applied while building the tree, so toggling "служебные" does not invalidate the index.
+- Search covers the folders on the map and every file in the index: a result shows the name, size and folder; clicking reveals that folder on the map.
 
-Файл показывается с расширением. Если имя не влезает в узел, обрезается только имя, расширение остаётся: `verylongname_aaaa….txt`.
+## File names
 
-## Технические детали
+A file is shown with its extension. If the name does not fit the node, only the name is clipped and the extension stays: `verylongname_aaaa….txt`.
 
-- `isDesktopOnly: true` — плагин использует Node `fs` и `path` напрямую.
-- Сканирование идёт параллельно (8 воркеров, `fs.promises`), не блокирует интерфейс; прогресс виден в строке состояния.
-- Скрытые папки и служебные имена не попадают в расчёт размеров и счётчиков.
-- Индекс и кэш лежат в `<плагин>/cache/`, содержат только дерево и размеры, без служебных ссылок.
-- Карта живёт в собственном `ItemView` (`folder-mindmap-view`), отдельно от заметок.
+## Technical notes
 
-## Структура проекта
+- `isDesktopOnly: true` — the plugin uses Node `fs` and `path` directly.
+- Scanning runs in parallel (8 workers, `fs.promises`) and does not block the UI; progress is shown in the status bar.
+- Hidden folders and service names never count towards sizes or counters.
+- Index and cache live in `<plugin>/cache/` and contain only the tree and sizes, no service references.
+- The map is its own `ItemView` (`folder-mindmap-view`), separate from notes.
+- No telemetry, no network requests: everything happens locally.
+
+## Project layout
 
 ```
-main.js          весь код плагина: сканирование, агрегация, раскладка, вид, настройки
-styles.css       оформление карты и панели инструментов
-manifest.json    манифест Obsidian (id, версия, минимальная версия приложения)
-tests/           Node-проверки логики без запуска Obsidian
+main.js          the whole plugin: scanning, aggregation, layout, view, settings
+styles.css       map and toolbar styling
+manifest.json    Obsidian manifest (id, version, minimum app version)
+tests/           Node checks of the logic without launching Obsidian
 ```
 
-## Разработка и проверки
+## Development and checks
 
-Юнит-проверки не требуют Obsidian — модуль `obsidian` подменяется заглушкой:
+Unit checks need no Obsidian — the `obsidian` module is stubbed:
 
 ```bash
 node tests/logic.test.js main.js
 ```
 
-Проверяется сканирование, агрегация размеров и счётчиков, лимит дочерних узлов и раскладка на временном дереве.
+They cover scanning, size aggregation, counters, the child node limit and layout on a temporary tree.
 
-Живая проверка (Obsidian 1.15.0): открытие папки, раскрытие/сворачивание узлов, поиск с переходом, переключение служебных папок, восстановление вида после перезапуска, перетаскивание файлов и папок мышью (включая отмену переноса и запрет класть папку в себя), кнопка «отменить», системное окно при совпадении имён, раскрытие пустых папок, индекс (5 208 каталогов / 68 525 файлов: первое открытие 2,4 с, повторное — 0,3 с, добавленный файл подхватывается перечитыванием одной папки), поиск по именам файлов из индекса.
+Live checks (Obsidian 1.15.0): opening a folder, expanding/collapsing nodes, search with jump, toggling service folders, restoring the view after a restart, dragging files and folders (including cancelling a move and refusing to put a folder inside itself), the undo button, the system dialog on name conflicts, expanding empty folders, the index (5,208 directories / 68,525 files: first open 2.4 s, second 0.3 s, a new file is picked up by re-reading a single directory) and file name search from the index.
 
-## Ограничения
+## Limitations
 
-- Только десктоп.
-- Очень большие каталоги читаются долго при первом открытии (индекс строится один раз); дальше открытие почти мгновенное.
-- Размеры считаются по фактическим файлам: символические ссылки и облачные «плейсхолдеры» могут отражаться неточно.
-- Плагин работает с реальными файлами на диске: переименование и перемещение необратимы, корзину Obsidian они не используют.
+- Desktop only.
+- Very large directories are slow on the very first open (the index is built once); afterwards opening is nearly instant.
+- Sizes come from the real files: symbolic links and cloud "placeholders" may be reported inaccurately.
+- The plugin works with real files on disk: renames and moves are irreversible and do not use the Obsidian trash.
 
-## Лицензия
+## License
 
-Личный проект, лицензия не задана. Все права у автора.
+MIT — see [LICENSE](LICENSE).

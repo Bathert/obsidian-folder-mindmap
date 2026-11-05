@@ -493,6 +493,7 @@ class FolderMindmapView extends ItemView {
     this.ghostEl = null;
     this.suppressClick = false;
     this.undoStack = [];
+    this.clickTimer = null;
   }
 
   getViewType() {
@@ -1024,6 +1025,7 @@ class FolderMindmapView extends ItemView {
         this.openMenu(n, e);
       });
       grp.addEventListener('pointerdown', (e) => this.onNodeDown(n, e));
+      grp.addEventListener('dblclick', (e) => this.onNodeDblClick(n, e));
       boxes.appendChild(grp);
 
       maxX = Math.max(maxX, n._x + NODE_W);
@@ -1110,6 +1112,10 @@ class FolderMindmapView extends ItemView {
   }
 
   startDrag(pending, e) {
+    if (this.clickTimer) {
+      clearTimeout(this.clickTimer);
+      this.clickTimer = null;
+    }
     this.dragging = true;
     this.dragSource = pending.node;
     this.suppressClick = true;
@@ -1197,6 +1203,23 @@ class FolderMindmapView extends ItemView {
       this.suppressClick = false;
       return;
     }
+    if (this.clickTimer) clearTimeout(this.clickTimer);
+    this.clickTimer = setTimeout(() => {
+      this.clickTimer = null;
+      this.activateNode(node);
+    }, 220);
+  }
+
+  onNodeDblClick(node) {
+    if (this.clickTimer) {
+      clearTimeout(this.clickTimer);
+      this.clickTimer = null;
+    }
+    if (node.pseudo || this.dragging) return;
+    this.renameNode(node);
+  }
+
+  activateNode(node) {
     if (node.pseudo) {
       if (node._p) {
         if (node.pseudoFiles) node._p.showAllFiles = true;

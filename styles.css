@@ -213,6 +213,20 @@
   pointer-events: none;
 }
 
+.fm-node.fm-pseudo .fm-box {
+  stroke-dasharray: 4 3;
+  opacity: 0.75;
+}
+
+.fm-node.fm-pseudo .fm-name {
+  font-style: italic;
+  fill: var(--text-faint);
+}
+
+.fm-node.fm-empty .fm-name {
+  fill: var(--text-muted);
+}
+
 .fm-node.fm-file .fm-box {
   fill: transparent;
   stroke-dasharray: 3 3;

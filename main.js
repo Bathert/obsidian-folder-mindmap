@@ -203,7 +203,22 @@ function visibleChildren(node, st) {
       out.push(moreNode(node, files.slice(0, flim), files.slice(flim), 'files', node.moreFiles || 0));
     }
   }
+  if (!out.length) out.push(emptyNode(node));
   return out;
+}
+function emptyNode(parent) {
+  return {
+    name: 'пусто',
+    path: parent.path + '\u0001e',
+    depth: parent.depth + 1,
+    size: 0,
+    total: 0,
+    files: 0,
+    dirs: 0,
+    kids: [],
+    pseudo: true,
+    emptyMark: true,
+  };
 }
 
 function computeLayout(root, st) {
@@ -271,6 +286,16 @@ function cssEscape(value) {
 
 function normPath(p) {
   return String(p || '').replace(/\//g, nodePath.sep).replace(/[\\/]+$/, '').toLowerCase();
+}
+
+function freeName(dir, name, isFile) {
+  const ext = isFile ? nodePath.extname(name) : '';
+  const base = ext ? name.slice(0, name.length - ext.length) : name;
+  for (let i = 2; i <= 999; i++) {
+    const candidate = base + ' (' + i + ')' + ext;
+    if (!fs.existsSync(nodePath.join(dir, candidate))) return candidate;
+  }
+  return null;
 }
 
 function hashPath(p) {
@@ -782,18 +807,66 @@ class FolderMindmapView extends ItemView {
     new MoveModal(this.app, this.plugin, full, (dest) => this.applyMove(full, !!node.file, dest)).open();
   }
 
+  resolveConflict(dest, name, isFile, alt) {
+    const what = isFile ? 'Файл' : 'Папка';
+    const detail =
+      what + ' с таким именем уже лежит в этой папке. «Заменить» — старое удалится безвозвратно' +
+      (alt ? ', «Переименовать» — новый станет «' + alt + '».' : '.');
+    try {
+      const electron = require('electron');
+      const dialog = (electron && electron.remote && electron.remote.dialog) || (electron && electron.dialog);
+      if (dialog && typeof dialog.showMessageBoxSync === 'function') {
+        const idx = dialog.showMessageBoxSync({
+          type: 'warning',
+          buttons: ['Заменить', 'Переименовать', 'Отмена'],
+          defaultId: 1,
+          cancelId: 2,
+          noLink: true,
+          title: 'Файл уже существует',
+          message: 'В папке «' + dest + '» уже есть «' + name + '»',
+          detail: detail,
+        });
+        return idx === 0 ? 'replace' : idx === 1 ? 'rename' : 'cancel';
+      }
+    } catch (e) {
+      /* electron недоступен — ниже простое окно */
+    }
+    const ok = window.confirm('В папке «' + dest + '» уже есть «' + name + '».\n\nЗаменить существующий объект? «Отмена» — перенос не выполняется.');
+    return ok ? 'replace' : 'cancel';
+  }
+
   applyMove(fullPath, isFile, rawDest, record) {
     const dest = String(rawDest).replace(/[\\/]+$/, '').replace(/\//g, nodePath.sep);
     const name = nodePath.basename(fullPath);
-    const target = nodePath.join(dest, name);
+    let target = nodePath.join(dest, name);
     if (normPath(target) === normPath(fullPath)) return;
     if (!isFile && normPath(dest).indexOf(normPath(fullPath) + nodePath.sep) === 0) {
       new Notice('Нельзя переместить папку внутрь себя');
       return;
     }
+    let finalName = name;
     if (fs.existsSync(target)) {
-      new Notice('В этой папке уже есть «' + name + '»');
-      return;
+      const alt = freeName(dest, name, isFile);
+      const choice = this.resolveConflict(dest, name, isFile, alt);
+      if (choice === 'cancel') {
+        this.setStatus('перенос отменён: «' + name + '» уже есть в папке');
+        return;
+      }
+      if (choice === 'replace') {
+        try {
+          fs.rmSync(target, { recursive: true, force: true });
+        } catch (e) {
+          new Notice('Не удалось заменить: ' + e.message);
+          return;
+        }
+      } else {
+        if (!alt) {
+          new Notice('Не удалось подобрать свободное имя');
+          return;
+        }
+        finalName = alt;
+        target = nodePath.join(dest, alt);
+      }
     }
     let size = 0;
     try {
@@ -821,7 +894,7 @@ class FolderMindmapView extends ItemView {
     else if (inside && isFile) {
       const destNode = this.findFolder(dest);
       if (destNode) {
-        destNode.fileList.push({ n: name, s: size });
+        destNode.fileList.push({ n: finalName, s: size });
         destNode.fileList.sort((a, b) => b.s - a.s);
         destNode.size += size;
         destNode.files += 1;
@@ -975,7 +1048,7 @@ class FolderMindmapView extends ItemView {
       const hasKids = n.kids && n.kids.length;
       const open = this.expanded.has(n.path);
       const grp = document.createElementNS(NS, 'g');
-      grp.setAttribute('class', 'fm-node' + (hasKids ? '' : ' fm-leaf') + (open && hasKids ? ' fm-open' : '') + (n.file ? ' fm-file' : ''));
+      grp.setAttribute('class', 'fm-node' + (hasKids ? '' : ' fm-leaf') + (open && hasKids ? ' fm-open' : '') + (n.file ? ' fm-file' : '') + (n.pseudo ? ' fm-pseudo' : '') + (!n.file && !hasKids && !n.files ? ' fm-empty' : ''));
       grp.setAttribute('transform', 'translate(' + n._x + ',' + n._y + ')');
       grp.setAttribute('data-path', n.path);
 
@@ -1006,7 +1079,9 @@ class FolderMindmapView extends ItemView {
       size.setAttribute('x', String(NODE_W - 8));
       size.setAttribute('y', String(NODE_H / 2 + 0.5));
       size.setAttribute('text-anchor', 'end');
-      size.textContent = fmt(n.total);
+      size.textContent = !n.file && !hasKids
+        ? n.files + ' ' + plural(n.files, 'файл', 'файла', 'файлов') + ' · ' + fmt(n.total)
+        : fmt(n.total);
       grp.appendChild(size);
 
       if (hasKids && !open) {
@@ -1221,6 +1296,7 @@ class FolderMindmapView extends ItemView {
 
   activateNode(node) {
     if (node.pseudo) {
+      if (node.emptyMark) return;
       if (node._p) {
         if (node.pseudoFiles) node._p.showAllFiles = true;
         else node._p.showAll = true;
@@ -1231,10 +1307,6 @@ class FolderMindmapView extends ItemView {
     }
     if (node.file) {
       this.setStatus(this.humanPath(node.path) + ' · ' + fmt(node.total));
-      return;
-    }
-    if (!node.kids.length) {
-      this.setStatus(node.path + ' · ' + fmt(node.total));
       return;
     }
     if (this.expanded.has(node.path)) this.expanded.delete(node.path);

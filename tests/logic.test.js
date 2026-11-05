@@ -92,6 +92,15 @@ w(path.join('node_modules', 'pkg', 'index.js'), 4096);
   const noFiles = lib.visibleChildren(root, { hidden: new Set(), maxChildren: 45, showFiles: false, maxFiles: 30 });
   assert(noFiles.filter((n) => n.file).length === 0, 'без файлов остаются только папки');
 
+  // пустая папка при раскрытии даёт пометку «пусто»
+  const empties = lib.visibleChildren(byName.empty, { hidden: new Set(), maxChildren: 45, showFiles: true, maxFiles: 30 });
+  assert(empties.length === 1 && empties[0].emptyMark && empties[0].name === 'пусто', 'пустая папка раскрывается с пометкой «пусто»');
+
+  // папка только с файлами (без подпапок) тоже раскрывается
+  const onlyFiles = { name: 'of', path: '/of', depth: 1, size: 5, total: 5, files: 2, dirs: 0, kids: [], fileList: [{ n: 'a.txt', s: 2 }, { n: 'b.txt', s: 3 }], moreFiles: 0 };
+  const ofVis = lib.visibleChildren(onlyFiles, { hidden: new Set(), maxChildren: 45, showFiles: true, maxFiles: 30 });
+  assert(ofVis.length === 2 && ofVis.every((n) => n.file), 'папка только с файлами показывает файлы');
+
   // кэш-сериализация не должна падать на _p
   lay = lib.computeLayout(root, { expanded: new Set([root.path, byName.A.path]), hidden: new Set(), maxChildren: 45 });
   const json = JSON.stringify(root, (k, v) => (k.charAt(0) === '_' ? undefined : v));

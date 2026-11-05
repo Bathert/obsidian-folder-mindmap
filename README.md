@@ -2,7 +2,7 @@
 
 An Obsidian plugin that turns any folder into an interactive mind map: collapsible nodes, sizes, file counts, search and basic file operations right on the map. It works with folders inside the vault and with any directory on disk (for example `E:\My Drive`).
 
-Русская версия: [README.ru.md](README.ru.md)
+Русская версия: [README.ru.md](README.ru.md) · **English**
 
 ## Why this exists
 

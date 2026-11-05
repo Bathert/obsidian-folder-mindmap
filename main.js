@@ -264,6 +264,11 @@ function normalizePath(raw) {
   }
 }
 
+function cssEscape(value) {
+  if (typeof CSS !== 'undefined' && CSS.escape) return CSS.escape(String(value));
+  return String(value).replace(/["\\]/g, '\\$&');
+}
+
 function normPath(p) {
   return String(p || '').replace(/\//g, nodePath.sep).replace(/[\\/]+$/, '').toLowerCase();
 }
@@ -481,6 +486,13 @@ class FolderMindmapView extends ItemView {
     this.hiddenSet = new Set();
     this.showFiles = true;
     this.lastLayout = [];
+    this.pendingDrag = null;
+    this.dragging = false;
+    this.dragSource = null;
+    this.dropEl = null;
+    this.ghostEl = null;
+    this.suppressClick = false;
+    this.undoStack = [];
   }
 
   getViewType() {
@@ -547,6 +559,7 @@ class FolderMindmapView extends ItemView {
     this.svcBtn = mk('служебные', 'Показывать node_modules, .git и подобные', () => this.toggleService(), 'fm-toggle on');
     this.filesBtn = mk('файлы', 'Показывать файлы, а не только папки', () => this.toggleFiles(), 'fm-toggle on');
     mk('обновить', 'Перечитать папку', () => this.load(true));
+    this.undoBtn = mk('отменить', 'Отменить последнее перемещение или переименование', () => this.undoLast(), 'fm-disabled');
     mk('+', 'Приблизить', () => this.zoom(1.2));
     mk('−', 'Отдалить', () => this.zoom(1 / 1.2));
     mk('⛶', 'Вписать в окно', () => this.fit());
@@ -703,7 +716,7 @@ class FolderMindmapView extends ItemView {
     }).open();
   }
 
-  applyRename(fullPath, isFile, newName) {
+  applyRename(fullPath, isFile, newName, record) {
     const name = nodePath.basename(fullPath);
     const dir = nodePath.dirname(fullPath);
     if (newName === name) return;
@@ -757,6 +770,10 @@ class FolderMindmapView extends ItemView {
     this.invalidateCache();
     this.render();
     this.setStatus('переименовано: ' + target);
+    if (record !== false) {
+      this.undoStack.push({ kind: 'rename', path: target, isFile: isFile, oldName: name });
+      this.updateUndoBtn();
+    }
   }
 
   moveNode(node) {
@@ -764,7 +781,7 @@ class FolderMindmapView extends ItemView {
     new MoveModal(this.app, this.plugin, full, (dest) => this.applyMove(full, !!node.file, dest)).open();
   }
 
-  applyMove(fullPath, isFile, rawDest) {
+  applyMove(fullPath, isFile, rawDest, record) {
     const dest = String(rawDest).replace(/[\\/]+$/, '').replace(/\//g, nodePath.sep);
     const name = nodePath.basename(fullPath);
     const target = nodePath.join(dest, name);
@@ -817,6 +834,10 @@ class FolderMindmapView extends ItemView {
     this.render();
     this.setStatus('перемещено: ' + target);
     new Notice('Перемещено: ' + target);
+    if (record !== false) {
+      this.undoStack.push({ kind: 'move', path: target, isFile: isFile, backTo: nodePath.dirname(fullPath) });
+      this.updateUndoBtn();
+    }
   }
 
   detachFromTree(fullPath, isFile, name) {
@@ -848,6 +869,21 @@ class FolderMindmapView extends ItemView {
     this.recountStats();
   }
 
+  undoLast() {
+    const op = this.undoStack.pop();
+    this.updateUndoBtn();
+    if (!op) {
+      new Notice('Нечего отменять');
+      return;
+    }
+    if (op.kind === 'move') this.applyMove(op.path, op.isFile, op.backTo, false);
+    else this.applyRename(op.path, op.isFile, op.oldName, false);
+  }
+
+  updateUndoBtn() {
+    if (this.undoBtn) this.undoBtn.toggleClass('fm-disabled', this.undoStack.length === 0);
+  }
+
   openMenu(node, evt) {
     const full = node.file ? this.humanPath(node.path) : node.path;
     const menu = new Menu();
@@ -866,21 +902,25 @@ class FolderMindmapView extends ItemView {
   expandLevels(maxLevel) {
     if (!this.tree) return;
     const cap = 2500;
+    this.expanded = new Set([this.tree.path]);
     let level = 1;
     while (level <= maxLevel) {
+      const atLevel = this.flat.filter((n) => !n.file && n.depth === level - 1 && n.kids.length);
+      if (!atLevel.length) break;
       const added = [];
-      for (const n of this.flat) {
-        if (!n.file && n.depth === level - 1 && n.kids.length && !this.expanded.has(n.path)) {
+      for (const n of atLevel) {
+        if (!this.expanded.has(n.path)) {
           this.expanded.add(n.path);
           added.push(n.path);
         }
       }
-      if (!added.length) break;
-      const layout = computeLayout(this.tree, this.st());
-      if (layout.nodes.length > cap) {
-        for (const p of added) this.expanded.delete(p);
-        new Notice('Узлов слишком много — раскрыто до уровня ' + (level - 1));
-        break;
+      if (added.length) {
+        const layout = computeLayout(this.tree, this.st());
+        if (layout.nodes.length > cap) {
+          for (const p of added) this.expanded.delete(p);
+          new Notice('Узлов слишком много — раскрыто до уровня ' + (level - 1));
+          break;
+        }
       }
       level += 1;
     }
@@ -983,6 +1023,7 @@ class FolderMindmapView extends ItemView {
         e.preventDefault();
         this.openMenu(n, e);
       });
+      grp.addEventListener('pointerdown', (e) => this.onNodeDown(n, e));
       boxes.appendChild(grp);
 
       maxX = Math.max(maxX, n._x + NODE_W);
@@ -1037,18 +1078,125 @@ class FolderMindmapView extends ItemView {
   }
 
   onMove(e) {
-    if (!this.drag) return;
-    this.tx = this.drag.tx + (e.clientX - this.drag.x);
-    this.ty = this.drag.ty + (e.clientY - this.drag.y);
-    this.apply();
+    if (this.drag) {
+      this.tx = this.drag.tx + (e.clientX - this.drag.x);
+      this.ty = this.drag.ty + (e.clientY - this.drag.y);
+      this.apply();
+      return;
+    }
+    if (!this.pendingDrag) return;
+    if (!this.dragging) {
+      const dx = Math.abs(e.clientX - this.pendingDrag.x);
+      const dy = Math.abs(e.clientY - this.pendingDrag.y);
+      if (dx + dy < 8) return;
+      this.startDrag(this.pendingDrag, e);
+    }
+    if (this.dragging) this.updateDrag(e);
   }
 
-  onUp() {
+  onUp(e) {
     this.drag = null;
     this.svg.removeClass('fm-drag');
+    if (this.dragging) {
+      this.finishDrag(e);
+      return;
+    }
+    this.pendingDrag = null;
+  }
+
+  onNodeDown(node, e) {
+    if (e.button !== 0 || node.pseudo) return;
+    this.pendingDrag = { node: node, x: e.clientX, y: e.clientY, id: e.pointerId };
+  }
+
+  startDrag(pending, e) {
+    this.dragging = true;
+    this.dragSource = pending.node;
+    this.suppressClick = true;
+    try {
+      this.svg.setPointerCapture(pending.id);
+    } catch (err) {
+      /* синтетическое событие без активного указателя */
+    }
+    this.svg.addClass('fm-dragging');
+    const full = pending.node.file ? this.humanPath(pending.node.path) : pending.node.path;
+    const ghost = document.createElement('div');
+    ghost.className = 'fm-ghost';
+    ghost.textContent = nodePath.basename(full);
+    this.svg.parentElement.appendChild(ghost);
+    this.ghostEl = ghost;
+    const src = this.svg.querySelector('.fm-node[data-path="' + cssEscape(pending.node.path) + '"]');
+    if (src) src.classList.add('fm-source');
+    this.updateDrag(e);
+  }
+
+  updateDrag(e) {
+    const canvas = this.svg.parentElement.getBoundingClientRect();
+    if (this.ghostEl) {
+      this.ghostEl.style.left = e.clientX - canvas.left + 'px';
+      this.ghostEl.style.top = e.clientY - canvas.top + 'px';
+    }
+    let hit = null;
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const grp = el && el.closest ? el.closest('.fm-node') : null;
+    if (grp && grp !== this.ghostEl) {
+      const path = grp.getAttribute('data-path');
+      const candidate = (this.lastLayout || []).find((n) => n.path === path);
+      if (candidate && !candidate.pseudo && this.canDropOn(candidate)) hit = grp;
+    }
+    if (this.dropEl && this.dropEl !== hit) this.dropEl.classList.remove('fm-drop');
+    if (hit) hit.classList.add('fm-drop');
+    this.dropEl = hit;
+  }
+
+  canDropOn(target) {
+    if (!this.dragSource || target.file) return false;
+    const src = this.dragSource;
+    if (target.path === src.path) return false;
+    if (!src.file) {
+      const srcFull = normPath(src.path);
+      if (normPath(target.path).indexOf(srcFull + nodePath.sep) === 0) return false;
+    }
+    return true;
+  }
+
+  finishDrag(e) {
+    const target = this.dropEl
+      ? (this.lastLayout || []).find((n) => n.path === this.dropEl.getAttribute('data-path'))
+      : null;
+    const src = this.dragSource;
+    if (this.ghostEl) this.ghostEl.remove();
+    this.ghostEl = null;
+    if (this.dropEl) this.dropEl.classList.remove('fm-drop');
+    this.dropEl = null;
+    this.svg.removeClass('fm-dragging');
+    this.dragging = false;
+    this.pendingDrag = null;
+    this.dragSource = null;
+    try {
+      this.svg.releasePointerCapture(e.pointerId);
+    } catch (err) {
+      /* указатель уже отпущен */
+    }
+    if (!src) return;
+    const full = src.file ? this.humanPath(src.path) : src.path;
+    if (!target) {
+      this.setStatus('перетаскивание отменено: ' + nodePath.basename(full));
+      return;
+    }
+    const dest = target.file ? nodePath.dirname(this.humanPath(target.path)) : target.path;
+    if (normPath(dest) === normPath(nodePath.dirname(full))) {
+      this.setStatus('уже в этой папке: ' + nodePath.basename(full));
+      return;
+    }
+    this.applyMove(full, !!src.file, dest);
   }
 
   onNodeClick(node) {
+    if (this.suppressClick) {
+      this.suppressClick = false;
+      return;
+    }
     if (node.pseudo) {
       if (node._p) {
         if (node.pseudoFiles) node._p.showAllFiles = true;

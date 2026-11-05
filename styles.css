@@ -176,6 +176,43 @@
   stroke-width: 2;
 }
 
+.fm-node.fm-drop .fm-box {
+  stroke: var(--interactive-accent);
+  stroke-width: 2.5;
+  fill: var(--background-modifier-hover);
+}
+
+.fm-node.fm-source {
+  opacity: 0.4;
+}
+
+.fm-svg.fm-dragging {
+  cursor: grabbing;
+}
+
+.fm-ghost {
+  position: absolute;
+  pointer-events: none;
+  z-index: 25;
+  transform: translate(12px, 12px);
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 3px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--interactive-accent);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  font-size: 12px;
+  box-shadow: var(--shadow-s);
+}
+
+.fm-btn.fm-disabled {
+  opacity: 0.38;
+  pointer-events: none;
+}
+
 .fm-node.fm-file .fm-box {
   fill: transparent;
   stroke-dasharray: 3 3;

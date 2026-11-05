@@ -1,0 +1,15 @@
+# Служебные файлы Obsidian и локальное состояние
+.obsidian/
+data.json
+cache/
+workspace*.json
+
+# Зависимости и сборка
+node_modules/
+package-lock.json
+
+# ОС и редакторы
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log

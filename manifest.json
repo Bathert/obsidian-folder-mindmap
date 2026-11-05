@@ -1,0 +1,9 @@
+{
+  "id": "folder-mindmap",
+  "name": "Folder Mindmap",
+  "version": "0.2.0",
+  "minAppVersion": "1.4.0",
+  "description": "Показывает любую папку (в том числе вне хранилища) как интерактивную карту: размеры, вложенность, поиск.",
+  "author": "Bathert",
+  "isDesktopOnly": true
+}

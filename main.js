@@ -62,73 +62,90 @@ function aggregate(node) {
   return node.total;
 }
 
+const SCAN_CONCURRENCY = 8;
+
 async function scanFolder(rootPath, options, hooks) {
   const hidden = new Set((options.hiddenNames || []).map((s) => String(s).toLowerCase()));
   const maxDepth = Math.max(1, Math.min(40, Number(options.maxDepth) || 12));
   const onProgress = hooks && hooks.onProgress;
   const isCancelled = hooks && hooks.isCancelled;
   const started = Date.now();
+  const fsp = fs.promises;
 
   const rootName = nodePath.basename(rootPath) || rootPath;
   const root = makeNode(rootName, rootPath, 0);
-  const stack = [[rootPath, root]];
-  let seen = 0;
-
   if (!fs.existsSync(rootPath)) throw new Error('папка не найдена');
 
-  while (stack.length) {
-    if (isCancelled && isCancelled()) throw new Error('отменено');
-    const item = stack.pop();
-    const dir = item[0];
-    const node = item[1];
+  const queue = [[rootPath, root]];
+  let seen = 0;
+
+  const takeDir = async (dir, node) => {
     let entries = [];
     try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
+      entries = await fsp.readdir(dir, { withFileTypes: true });
     } catch (e) {
       node.error = true;
-      continue;
+      return;
     }
+    const subdirs = [];
+    const files = [];
     for (const entry of entries) {
       const full = nodePath.join(dir, entry.name);
-      let isDir = entry.isDirectory();
-      let isFile = entry.isFile();
       if (entry.isSymbolicLink()) {
+        let st = null;
         try {
-          const st = fs.statSync(full);
-          isDir = st.isDirectory();
-          isFile = st.isFile();
+          st = await fsp.stat(full);
         } catch (e) {
-          continue;
+          st = null;
         }
+        if (st && st.isDirectory()) subdirs.push({ name: entry.name, full: full });
+        else if (st && st.isFile()) files.push({ name: entry.name, full: full });
+        continue;
       }
-      if (isDir) {
-        if (hidden.has(entry.name.toLowerCase())) continue;
-        if (node.depth + 1 > maxDepth) continue;
-        const child = makeNode(entry.name, full, node.depth + 1);
-        node.kids.push(child);
-        stack.push([full, child]);
-      } else if (isFile) {
-        try {
-          const st = fs.statSync(full);
-          node.size += st.size;
-          node.files += 1;
-          node.fileList.push({ n: entry.name, s: st.size });
-        } catch (e) {
-          /* файл исчез или нет доступа */
-        }
+      if (entry.isDirectory()) subdirs.push({ name: entry.name, full: full });
+      else if (entry.isFile()) files.push({ name: entry.name, full: full });
+    }
+
+    for (const d of subdirs) {
+      if (hidden.has(d.name.toLowerCase())) continue;
+      if (node.depth + 1 > maxDepth) continue;
+      const child = makeNode(d.name, d.full, node.depth + 1);
+      node.kids.push(child);
+      queue.push([d.full, child]);
+    }
+
+    const CHUNK = 32;
+    for (let i = 0; i < files.length; i += CHUNK) {
+      const slice = files.slice(i, i + CHUNK);
+      const sizes = await Promise.all(slice.map((f) => fsp.stat(f.full).then((st) => st.size).catch(() => null)));
+      for (let j = 0; j < slice.length; j++) {
+        if (sizes[j] === null) continue;
+        node.size += sizes[j];
+        node.files += 1;
+        node.fileList.push({ n: slice[j].name, s: sizes[j] });
       }
     }
+
     if (node.fileList.length > MAX_FILE_LIST) {
       node.fileList.sort((a, b) => b.s - a.s);
       node.moreFiles = node.fileList.length - MAX_FILE_LIST;
       node.fileList.length = MAX_FILE_LIST;
     }
+
     seen += 1;
-    if (seen % 40 === 0) {
-      if (onProgress) onProgress(seen, node.path);
-      await new Promise((resolve) => setTimeout(resolve, 0));
+    if (seen % 20 === 0 && onProgress) onProgress(seen, node.path);
+  };
+
+  const worker = async () => {
+    while (queue.length) {
+      if (isCancelled && isCancelled()) throw new Error('отменено');
+      const item = queue.shift();
+      if (!item) return;
+      await takeDir(item[0], item[1]);
     }
-  }
+  };
+
+  await Promise.all(Array.from({ length: SCAN_CONCURRENCY }, () => worker()));
 
   aggregate(root);
   const totalFiles = countFiles(root);

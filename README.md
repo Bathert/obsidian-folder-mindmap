@@ -16,7 +16,7 @@ I love Obsidian. So I see no reason why it can't also help me keep the folder st
 - Reads the structure only: names, sizes, file counts. Nothing is changed without an explicit command.
 - Folder index: on the next open only changed directories are re-read, the rest come from the index — opening takes a fraction of a second.
 - Search by file names: the search box finds both folders and files across the indexed tree.
-- Comments from properties: a file with frontmatter shows the value of its comment property (defaults: `comment`, `комментарий`, `description`, `описание`, `note`). The mode is toggled by the "комменты" button in the toolbar or by the checkbox in the settings.
+- Comments from properties: a file with frontmatter shows the value of its comment property (defaults: `comment`, `комментарий`, `description`, `описание`, `note`). The mode is toggled by the "comments" button in the toolbar or by the checkbox in the settings.
 - Restores the map view after a restart: expanded nodes, pan and zoom.
 - Reads the disk in parallel (8 workers) without blocking the UI: a folder with 5,200 directories and 68,500 files on C: is read in ~1.8 s versus ~26 s with a sequential walk.
 - Service folders (`node_modules`, `.git`, `__pycache__` and similar) are hidden with one toggle.
@@ -46,33 +46,33 @@ Requirements: Obsidian 1.4.0+ on desktop. The plugin does not work on mobile: it
 
 | Action | What it does |
 |---|---|
-| click a folder | expand / collapse the branch; an empty folder expands with a "пусто" (empty) marker |
-| "ещё N" | show the remaining folders of a node (when there are more than the limit) |
+| click a folder | expand / collapse the branch; an empty folder expands with an "empty" marker |
+| "more N" | show the remaining folders of a node (when there are more than the limit) |
 | mouse wheel | zoom |
 | drag the background | pan the map |
 | search | finds a folder or file by name, expands the path and highlights the folder |
-| "2 ур." / "3 ур." / "все" | expand the map to 2, 3 or all levels (with a guard against too many nodes) |
+| "2 lv." / "3 lv." / "all" | expand the map to 2, 3 or all levels (with a guard against too many nodes) |
 | right click a node | "Rename", "Move", "Copy path" |
 | double click a node | rename the folder or file |
 | drag a node | drop a file or folder onto another folder to move it |
-| "отменить" | undo the last move or rename |
-| "свернуть" | collapse everything down to the root |
-| "служебные" | show / hide `node_modules`, `.git`, `__pycache__` and similar |
-| "файлы" | show / hide files (on by default) |
-| "комменты" | show / hide comment properties of files |
-| "обновить" | re-read the folder (unchanged directories still come from the index) |
+| "undo" | undo the last move or rename |
+| "collapse" | collapse everything down to the root |
+| "system" | show / hide `node_modules`, `.git`, `__pycache__` and similar |
+| "files" | show / hide files (on by default) |
+| "comments" | show / hide comment properties of files |
+| "refresh" | re-read the folder (unchanged directories still come from the index) |
 | ⛶ | fit the map to the window |
 
-The interface is currently in Russian; the labels above are the literal button captions.
+The button captions in the shipped UI are Russian; the table above translates them one to one. An English localisation is the next step.
 
 ## Settings
 
 - **Default folders** — one per line; the first one is prefilled in the dialog and opened by the "last folder" command.
 - **Service folders** — comma-separated names; they are not shown and do not count towards sizes.
-- **Folders per node** — how many child folders to show at once (the rest go under "ещё N"), 45 by default.
+- **Folders per node** — how many child folders to show at once (the rest go under "more N"), 45 by default.
 - **Show files** — render files next to folders.
 - **Files per node** — how many files to show inside one folder, 10 by default.
-- **Show comments** — same as the "комменты" button: render the comment property under the file name.
+- **Show comments** — same as the "comments" button: render the comment property under the file name.
 - **Comment properties** — comma-separated property names; the first one found wins. Changing the list rebuilds the index.
 - **Read depth** — nesting limit while scanning, 14 by default.
 - **Index** — stored in the plugin folder and updated by directory modification time; the timer-based cache is no longer used.
@@ -94,11 +94,11 @@ Drag any node with the mouse: a label follows the cursor, a valid destination fo
 
 Not allowed: dropping onto a file (folders only), onto the node itself, or into its own subtree — such targets are not highlighted. Releasing over empty space cancels the move.
 
-A folder without subfolders shows its file count next to the size — "0 файлов · 0 Б", "3 файла · 1,2 МБ"; a folder with subfolders shows the number of subfolders: "2 пап. · 14,1 МБ". Everything sits on one line on the right, so the name is clipped to the remaining width. Such a folder without subfolders also expands: inside there are either its files or a "пусто" marker.
+A folder without subfolders shows its file count next to the size — "0 files · 0 B", "3 files · 1.2 MB"; a folder with subfolders shows the number of subfolders: "2 sub. · 14.1 MB". Everything sits on one line on the right, so the name is clipped to the remaining width. Such a folder without subfolders also expands: inside there are either its files or an "empty" marker.
 
 If the destination folder already contains an object with the same name, the plugin shows the native system dialog: **Replace** (the old object is deleted permanently), **Rename** (the new one becomes `file (2).txt`) or **Cancel** (nothing is moved).
 
-Mistake? The "отменить" button in the toolbar reverts the last move or rename (history lasts for the session).
+Mistake? The "undo" button in the toolbar reverts the last move or rename (history lasts for the session).
 
 ## Index and search
 
@@ -106,7 +106,7 @@ The folder index lives in `<plugin>/cache/idx-<hash>.json` and stores, per direc
 
 - When the map opens, each directory gets a single `stat`: if the mtime matches the index, the contents come from the index and files are not stat-ed again.
 - A directory that changed (something added, removed or renamed inside) is re-read on its own.
-- Hidden names and depth are applied while building the tree, so toggling "служебные" does not invalidate the index.
+- Hidden names and depth are applied while building the tree, so toggling "system" does not invalidate the index.
 - Search covers the folders on the map and every file in the index: a result shows the name, size and folder; clicking reveals that folder on the map.
 
 ## Comments from properties
@@ -119,7 +119,7 @@ comment: Anything that explains what this file is
 ---
 ```
 
-With the "комменты" toggle on, the map draws that value under the file name as a dim italic line, and the node becomes two lines tall. Hovering shows the full text, clicking puts the path, size and comment into the status bar.
+With the "comments" toggle on, the map draws that value under the file name as a dim italic line, and the node becomes two lines tall. Hovering shows the full text, clicking puts the path, size and comment into the status bar.
 
 - Properties are matched by name, case-insensitive: `comment`, `комментарий`, `description`, `описание`, `note` by default, configurable in the settings. The first match wins.
 - For notes inside the vault the value comes from the Obsidian metadata cache, so scanning stays fast and nothing extra is read from disk.
